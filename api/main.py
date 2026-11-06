@@ -26,6 +26,8 @@ with sqlite3.connect(DB) as db:
 with sqlite3.connect(DB) as db:
  db.execute("CREATE TABLE IF NOT EXISTS premium_subscriptions (user_id INTEGER PRIMARY KEY, expires_at INTEGER NOT NULL DEFAULT 0)")
  db.execute("CREATE TABLE IF NOT EXISTS star_payments (charge_id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, stars INTEGER NOT NULL, created_at INTEGER NOT NULL)")
+with sqlite3.connect(DB) as db:
+ db.execute("CREATE TABLE IF NOT EXISTS bot_preview (position INTEGER PRIMARY KEY, file_id TEXT NOT NULL)")
 ROOM_LOCK=threading.RLock()
 def user_id_from_token():
  return TOKEN.split(":")[0] if ":" in TOKEN else ""
@@ -71,6 +73,11 @@ class Handler(BaseHTTPRequestHandler):
  def do_GET(self):
   if self.path=="/health":return self.respond(200,{"ok":True})
   path=urlsplit(self.path).path
+  if path=='/api/internal/previews':
+   expected=hmac.new(TOKEN.encode(),b'preview-read',hashlib.sha256).hexdigest()
+   if not TOKEN or not hmac.compare_digest(self.headers.get('X-Wave-Signature',''),expected):return self.respond(403,{'error':'forbidden'})
+   with sqlite3.connect(DB) as db:rows=db.execute('SELECT file_id FROM bot_preview ORDER BY position LIMIT 4').fetchall()
+   return self.respond(200,{'photos':[r[0] for r in rows]})
   if path=='/api/premium':
    user=verify(self.headers.get('X-Telegram-Init-Data',''))
    if not user:return self.respond(401,{'error':'unauthorized'})
@@ -152,6 +159,7 @@ class Handler(BaseHTTPRequestHandler):
  def do_POST(self):
   path=urlsplit(self.path).path
   if path=='/api/internal/stars':return self.stars_payment()
+  if path=='/api/internal/previews':return self.preview_save()
   if path!='/api/rooms' and not path.startswith('/api/rooms/'):return self.respond(404,{'error':'not_found'})
   user=verify(self.headers.get('X-Telegram-Init-Data',''))
   if not user:return self.respond(401,{'error':'unauthorized'})
@@ -206,6 +214,20 @@ class Handler(BaseHTTPRequestHandler):
    else:return self.respond(404,{'error':'not_found'})
    # Keep playback clock unchanged when changing roles or queue.
    return self.respond(200,{'ok':True})
+ def preview_save(self):
+  try:
+   size=int(self.headers.get('Content-Length','0'))
+   if not 0<size<=4096:raise ValueError()
+   raw=self.rfile.read(size)
+   expected=hmac.new(TOKEN.encode(),raw,hashlib.sha256).hexdigest()
+   if not TOKEN or not hmac.compare_digest(self.headers.get('X-Wave-Signature',''),expected):return self.respond(403,{'error':'forbidden'})
+   data=json.loads(raw);photos=data['photos']
+   if not isinstance(photos,list) or len(photos)>4 or any(not isinstance(x,str) or not 10<=len(x)<=500 for x in photos):raise ValueError()
+   with ROOM_LOCK,sqlite3.connect(DB) as db:
+    db.execute('DELETE FROM bot_preview')
+    db.executemany('INSERT INTO bot_preview(position,file_id) VALUES(?,?)',list(enumerate(photos)))
+   return self.respond(200,{'ok':True,'count':len(photos)})
+  except (ValueError,KeyError,TypeError,json.JSONDecodeError):return self.respond(400,{'error':'invalid_previews'})
  def stars_payment(self):
   try:
    raw_size=int(self.headers.get('Content-Length','0'))

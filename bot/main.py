@@ -116,6 +116,7 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
 
 async def setpreview(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logging.info('setpreview received user_id=%s admin_configured=%s reply_photo=%s', update.effective_user.id, bool(ADMIN_ID), bool(update.effective_message.reply_to_message and update.effective_message.reply_to_message.photo))
     if not ADMIN_ID or update.effective_user.id != ADMIN_ID:
         await update.effective_message.reply_text('Настройка доступна только администратору.')
         return
@@ -131,6 +132,11 @@ async def setpreview(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         logging.exception('Failed to save preview')
         await update.effective_message.reply_text('Не удалось сохранить фото. Попробуй позже.')
+
+async def preview_command_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.effective_message
+    if message and message.text and message.text.strip().split()[0].split('@')[0].lower() == '/setpreview':
+        await setpreview(update, context)
 
 async def clearpreviews(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not ADMIN_ID or update.effective_user.id != ADMIN_ID:
@@ -153,6 +159,7 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("setpreview", setpreview))
     app.add_handler(CommandHandler("clearpreviews", clearpreviews))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, preview_command_fallback))
     app.add_handler(CallbackQueryHandler(premium_info, pattern="^premium_info$"))
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))

@@ -119,7 +119,7 @@ class Handler(BaseHTTPRequestHandler):
     if not track_id or len(track_id)>120:continue
     artwork=item.get('artwork') or {}
     if not isinstance(artwork,dict):artwork={}
-    tracks.append({'id':track_id,'title':str(item.get('title',''))[:200],'artist':str((item.get('user') or {}).get('name',''))[:200],'image':artwork.get('480x480') or artwork.get('150x150') or '', 'url':('https://api.audius.co/v1/tracks/'+track_id+'/stream' if streaming else ''),'provider':'Audius','license_url':'','streaming_enabled':streaming})
+    tracks.append({'id':track_id,'title':str(item.get('title',''))[:200],'artist':str((item.get('user') or {}).get('name',''))[:200],'image':artwork.get('480x480') or artwork.get('150x150') or '', 'url':('https://api.audius.co/v1/tracks/'+track_id+'/stream' if streaming else ''),'provider':'Audius','license_url':'','streaming_enabled':streaming,'permalink':item.get('permalink','')})
    return self.respond(200,{'tracks':tracks,'configured':True,'provider':'audius','streaming_enabled':streaming})
   except (urllib.error.URLError,ValueError,KeyError,TimeoutError):return self.respond(502,{'error':'catalog_unavailable'})
  def room_get(self,path):

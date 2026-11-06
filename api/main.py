@@ -84,6 +84,9 @@ class Handler(BaseHTTPRequestHandler):
  def catalog_get(self):
   user=verify(self.headers.get('X-Telegram-Init-Data',''))
   if not user:return self.respond(401,{'error':'unauthorized'})
+  provider=parse_qs(urlsplit(self.path).query).get('provider',['audius'])[0]
+  if provider=='audius':return self.audius_catalog()
+  if provider!='jamendo':return self.respond(400,{'error':'unknown_provider'})
   client_id=os.environ.get('JAMENDO_CLIENT_ID','').strip()
   if not client_id:return self.respond(200,{'tracks':[],'configured':False,'provider':'jamendo'})
   query=parse_qs(urlsplit(self.path).query).get('q',[''])[0].strip()
@@ -99,6 +102,25 @@ class Handler(BaseHTTPRequestHandler):
     if not audio.startswith('https://'):continue
     tracks.append({'id':str(item.get('id','')),'title':item.get('name',''),'artist':item.get('artist_name',''),'url':audio,'image':item.get('image',''),'license_url':item.get('license_ccurl',''),'provider':'Jamendo'})
    return self.respond(200,{'tracks':tracks,'configured':True,'provider':'jamendo'})
+  except (urllib.error.URLError,ValueError,KeyError,TimeoutError):return self.respond(502,{'error':'catalog_unavailable'})
+ def audius_catalog(self):
+  query=parse_qs(urlsplit(self.path).query).get('q',[''])[0].strip()
+  if not 1<=len(query)<=100:return self.respond(400,{'error':'invalid_query'})
+  # Streaming is deliberately disabled by default until commercial rights are reviewed.
+  streaming=os.environ.get('AUDIUS_STREAMING_ENABLED','false').lower()=='true'
+  url='https://api.audius.co/v1/tracks/search?'+urlencode({'query':query,'limit':25})
+  try:
+   req=urllib.request.Request(url,headers={'User-Agent':'WAVE-Music/1.0'})
+   with urllib.request.urlopen(req,timeout=8) as response:result=json.load(response)
+   tracks=[]
+   for item in result.get('data',[]):
+    if not isinstance(item,dict) or item.get('is_stream_gated') or item.get('is_unlisted'):continue
+    track_id=str(item.get('id',''))
+    if not track_id or len(track_id)>120:continue
+    artwork=item.get('artwork') or {}
+    if not isinstance(artwork,dict):artwork={}
+    tracks.append({'id':track_id,'title':str(item.get('title',''))[:200],'artist':str((item.get('user') or {}).get('name',''))[:200],'image':artwork.get('480x480') or artwork.get('150x150') or '', 'url':('https://api.audius.co/v1/tracks/'+track_id+'/stream' if streaming else ''),'provider':'Audius','license_url':'','streaming_enabled':streaming})
+   return self.respond(200,{'tracks':tracks,'configured':True,'provider':'audius','streaming_enabled':streaming})
   except (urllib.error.URLError,ValueError,KeyError,TimeoutError):return self.respond(502,{'error':'catalog_unavailable'})
  def room_get(self,path):
   user=verify(self.headers.get('X-Telegram-Init-Data',''))

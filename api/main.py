@@ -16,8 +16,7 @@ def verify(raw):
  try:
   params=dict(parse_qsl(raw,keep_blank_values=True,strict_parsing=True))
   received=params.pop("hash","")
-  check="
-".join(f"{k}={v}" for k,v in sorted(params.items()))
+  check="\n".join(f"{k}={v}" for k,v in sorted(params.items()))
   secret=hmac.new(b"WebAppData",TOKEN.encode(),hashlib.sha256).digest()
   expected=hmac.new(secret,check.encode(),hashlib.sha256).hexdigest()
   if not hmac.compare_digest(expected,received):

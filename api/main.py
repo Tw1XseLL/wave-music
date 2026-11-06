@@ -28,13 +28,16 @@ class Handler(BaseHTTPRequestHandler):
   self.send_header("Content-Type","application/json; charset=utf-8")
   self.send_header("Content-Length",str(len(payload)))
   self.send_header("Cache-Control","no-store")
-  if self.headers.get("Origin")==ORIGIN:
+  if self.headers.get("Origin","").rstrip("/")==ORIGIN:
    self.send_header("Access-Control-Allow-Origin",ORIGIN)
    self.send_header("Vary","Origin")
    self.send_header("Access-Control-Allow-Headers","Content-Type,X-Telegram-Init-Data")
    self.send_header("Access-Control-Allow-Methods","GET,PUT,OPTIONS")
   self.end_headers();self.wfile.write(payload)
- def do_OPTIONS(self):self.respond(204,{})
+ def do_OPTIONS(self):
+  origin=self.headers.get("Origin","").rstrip("/")
+  if origin!=ORIGIN:return self.respond(403,{"error":"origin_not_allowed"})
+  self.respond(200,{"ok":True})
  def do_GET(self):
   if self.path=="/health":return self.respond(200,{"ok":True})
   if self.path!="/api/library":return self.respond(404,{"error":"not_found"})

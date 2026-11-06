@@ -18,19 +18,24 @@ if TOKEN and not TOKEN.startswith("${{"):
 os.makedirs(os.path.dirname(DB),exist_ok=True)
 with sqlite3.connect(DB) as db:
  db.execute("CREATE TABLE IF NOT EXISTS library (user_id INTEGER PRIMARY KEY, favorites TEXT NOT NULL DEFAULT '[]', playlists TEXT NOT NULL DEFAULT '[]')")
+def user_id_from_token():
+ return TOKEN.split(":")[0] if ":" in TOKEN else ""
 def verify(raw):
  if not TOKEN or TOKEN.startswith("${{"):
   print("AUTH_CONFIG_ERROR: bot token missing or unresolved",flush=True);return None
  if not raw or len(raw)>8192:
   print("AUTH_ERROR: missing or oversized initData",flush=True);return None
  try:
-  params=dict(parse_qsl(raw,keep_blank_values=True,strict_parsing=True))
+  pairs=parse_qsl(raw,keep_blank_values=True,strict_parsing=True)
+  params=dict(pairs)
+  if len(params)!=len(pairs):
+   print("AUTH_ERROR: duplicate initData keys",flush=True);return None
   received=params.pop("hash","")
   check="\n".join(f"{k}={v}" for k,v in sorted(params.items()))
   secret=hmac.new(b"WebAppData",TOKEN.encode(),hashlib.sha256).digest()
   expected=hmac.new(secret,check.encode(),hashlib.sha256).hexdigest()
   if not hmac.compare_digest(expected,received):
-   print("AUTH_ERROR: signature mismatch",flush=True);return None
+   print("AUTH_ERROR: signature mismatch fields="+",".join(sorted(params))+" hash_present="+str(bool(received))+" token_bot_id_matches="+str(str(user_id_from_token())==str(TOKEN.split(":")[0])),flush=True);return None
   if abs(time.time()-int(params.get("auth_date","0")))>86400:
    print("AUTH_ERROR: expired initData",flush=True);return None
   user=json.loads(params["user"])

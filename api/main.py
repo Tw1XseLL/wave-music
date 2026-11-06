@@ -1,8 +1,9 @@
-import os, json, hmac, hashlib, sqlite3, time, urllib.request
+import os, json, hmac, hashlib, sqlite3, time, urllib.request, urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qsl
 
-TOKEN=os.environ.get("BOT_TOKEN","")
+TOKEN=os.environ.get("BOT_TOKEN","").strip()
+print("AUTH_CONFIG: token_format="+("valid_shape" if TOKEN.count(":")==1 and TOKEN.split(":")[0].isdigit() else "invalid_shape")+" token_length="+str(len(TOKEN)),flush=True)
 ORIGIN=os.environ.get("WEB_ORIGIN","https://wave-web-production.up.railway.app").rstrip("/")
 DB=os.environ.get("DB_PATH","/data/wave.sqlite3")
 if TOKEN and not TOKEN.startswith("${{"):
@@ -10,8 +11,10 @@ if TOKEN and not TOKEN.startswith("${{"):
   with urllib.request.urlopen("https://api.telegram.org/bot"+TOKEN+"/getMe",timeout=8) as response:
    identity=json.load(response)
   print("AUTH_BOT_IDENTITY: "+str(identity.get("result",{}).get("username","unknown")) if identity.get("ok") else "AUTH_CONFIG_ERROR: Telegram rejected BOT_TOKEN",flush=True)
- except Exception:
-  print("AUTH_CONFIG_ERROR: Telegram token identity check unavailable",flush=True)
+ except urllib.error.HTTPError as exc:
+  print("AUTH_CONFIG_ERROR: Telegram getMe HTTP "+str(exc.code),flush=True)
+ except Exception as exc:
+  print("AUTH_CONFIG_ERROR: Telegram getMe "+type(exc).__name__,flush=True)
 os.makedirs(os.path.dirname(DB),exist_ok=True)
 with sqlite3.connect(DB) as db:
  db.execute("CREATE TABLE IF NOT EXISTS library (user_id INTEGER PRIMARY KEY, favorites TEXT NOT NULL DEFAULT '[]', playlists TEXT NOT NULL DEFAULT '[]')")

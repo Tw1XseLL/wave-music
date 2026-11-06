@@ -19,6 +19,15 @@ PREVIEW_PHOTOS = [u.strip() for u in os.getenv("PREVIEW_PHOTO_URLS", "").split("
 if not TOKEN:
     raise RuntimeError("BOT_TOKEN is missing. Set it in Railway service variables.")
 
+def preview_api(method='GET', photos=None):
+    body = json.dumps({'photos': photos}, separators=(',', ':')).encode() if photos is not None else b'preview-read'
+    signature = hmac.new(TOKEN.encode(), body, hashlib.sha256).hexdigest()
+    request = urllib.request.Request(API_URL + '/api/internal/previews',
+        data=body if method == 'POST' else None,
+        headers={'X-Wave-Signature': signature, 'Content-Type': 'application/json'}, method=method)
+    with urllib.request.urlopen(request, timeout=12) as response:
+        return json.load(response)
+
 def main_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🎧 Открыть WAVE Music", web_app=WebAppInfo(url=URL))],
@@ -34,13 +43,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Нажми кнопку, чтобы открыть приложение прямо в Telegram.",
         reply_markup=main_keyboard(),
     )
-    if PREVIEW_PHOTOS:
+    try:
+        saved = await asyncio.to_thread(preview_api)
+        photos = saved.get('photos') or PREVIEW_PHOTOS
+    except Exception:
+        logging.exception('Could not load previews')
+        photos = PREVIEW_PHOTOS
+    if photos:
         try:
-            if len(PREVIEW_PHOTOS) == 1:
-                await update.effective_message.reply_photo(PREVIEW_PHOTOS[0], caption="📱 Интерфейс WAVE Music")
+            if len(photos) == 1:
+                await update.effective_message.reply_photo(photos[0], caption="📱 Интерфейс WAVE Music")
             else:
                 await update.effective_message.reply_media_group(
-                    [InputMediaPhoto(media=u, caption="📱 Интерфейс WAVE Music" if i == 0 else None) for i, u in enumerate(PREVIEW_PHOTOS)]
+                    [InputMediaPhoto(media=u, caption="📱 Интерфейс WAVE Music" if i == 0 else None) for i, u in enumerate(photos)]
                 )
         except Exception:
             logging.exception("Unable to send preview screenshots")
@@ -100,6 +115,32 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
             payment.telegram_payment_charge_id
         )
 
+async def setpreview(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not ADMIN_ID or update.effective_user.id != ADMIN_ID:
+        await update.effective_message.reply_text('Настройка доступна только администратору.')
+        return
+    photo = update.effective_message.reply_to_message
+    if not photo or not photo.photo:
+        await update.effective_message.reply_text('Ответь командой /setpreview на фотографию в этом чате.')
+        return
+    try:
+        old = await asyncio.to_thread(preview_api)
+        photos = (old.get('photos', []) + [photo.photo[-1].file_id])[-4:]
+        await asyncio.to_thread(preview_api, 'POST', photos)
+        await update.effective_message.reply_text(f'✅ Фото сохранено ({len(photos)}/4). Оно появится после /start.')
+    except Exception:
+        logging.exception('Failed to save preview')
+        await update.effective_message.reply_text('Не удалось сохранить фото. Попробуй позже.')
+
+async def clearpreviews(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not ADMIN_ID or update.effective_user.id != ADMIN_ID:
+        return
+    try:
+        await asyncio.to_thread(preview_api, 'POST', [])
+        await update.effective_message.reply_text('Фотографии приветствия очищены.')
+    except Exception:
+        logging.exception('Failed to clear previews')
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text("Нажми /start, чтобы открыть WAVE Music или узнать о Premium.")
 
@@ -110,6 +151,8 @@ def main():
     app = Application.builder().token(TOKEN).post_init(post_init).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("setpreview", setpreview))
+    app.add_handler(CommandHandler("clearpreviews", clearpreviews))
     app.add_handler(CallbackQueryHandler(premium_info, pattern="^premium_info$"))
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))

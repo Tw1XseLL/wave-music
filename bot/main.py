@@ -6,7 +6,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 
 logging.basicConfig(level=logging.INFO)
 URL = os.getenv("WEB_APP_URL", "https://wave-web-production.up.railway.app")
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.getenv("BOT_TOKEN", "").strip()
 if not TOKEN:
     raise RuntimeError("BOT_TOKEN is missing. Set it in Railway service variables.")
 

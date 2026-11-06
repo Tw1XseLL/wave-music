@@ -96,7 +96,7 @@ class Handler(BaseHTTPRequestHandler):
    if not role:return self.respond(403,{'error':'join_required'})
    queue=db.execute('SELECT item_id,title,artist,source FROM room_queue WHERE room_id=? ORDER BY rowid',(room[0],)).fetchall()
    members=db.execute('SELECT user_id,role FROM room_members WHERE room_id=?',(room[0],)).fetchall()
-   return self.respond(200,{'room':{'id':room[0],'owner_id':room[1],'title':room[2],'visibility':room[3],'track':json.loads(room[4]),'playing':bool(room[5]),'position':room[6],'updated':room[7]},'role':role[0],'members':[{'user_id':m[0],'role':m[1]} for m in members],'queue':[{'id':q[0],'title':q[1],'artist':q[2],'source':q[3]} for q in queue]})
+   return self.respond(200,{'room':{'id':room[0],'owner_id':room[1],'title':room[2],'visibility':room[3],'track':json.loads(room[4]),'playing':bool(room[5]),'position':room[6],'updated':room[7],'server_time':time.time(),'effective_position':room[6]+max(0,time.time()-room[7]) if room[5] else room[6]},'role':role[0],'members':[{'user_id':m[0],'role':m[1]} for m in members],'queue':[{'id':q[0],'title':q[1],'artist':q[2],'source':q[3]} for q in queue]})
  def do_POST(self):
   path=urlsplit(self.path).path
   if path!='/api/rooms' and not path.startswith('/api/rooms/'):return self.respond(404,{'error':'not_found'})
@@ -130,10 +130,19 @@ class Handler(BaseHTTPRequestHandler):
     if type(target)!=int or target==uid or newrole not in ('dj','listener'):return self.respond(400,{'error':'invalid_role'})
     cursor=db.execute("UPDATE room_members SET role=? WHERE room_id=? AND user_id=? AND role!='owner'",(newrole,rid,target))
     if not cursor.rowcount:return self.respond(404,{'error':'member_not_found'})
+   elif action=='next':
+    if role not in ('owner','dj'):return self.respond(403,{'error':'dj_only'})
+    item=db.execute('SELECT item_id,title,artist,source FROM room_queue WHERE room_id=? ORDER BY rowid LIMIT 1',(rid,)).fetchone()
+    if not item:return self.respond(409,{'error':'queue_empty'})
+    db.execute('DELETE FROM room_queue WHERE room_id=? AND item_id=?',(rid,item[0]))
+    db.execute('UPDATE rooms SET track=?,playing=1,position=0,updated=? WHERE id=?',(json.dumps({'title':item[1],'artist':item[2],'source':item[3]}),time.time(),rid))
    elif action=='control':
     if role not in ('owner','dj'):return self.respond(403,{'error':'dj_only'})
     playing=data.get('playing');position=data.get('position',0)
     if type(playing)!=bool or type(position) not in (int,float) or not 0<=position<=86400:return self.respond(400,{'error':'invalid_control'})
+    if not playing and 'position' not in data:
+     state=db.execute('SELECT playing,position,updated FROM rooms WHERE id=?',(rid,)).fetchone()
+     position=state[1]+max(0,time.time()-state[2]) if state[0] else state[1]
     db.execute('UPDATE rooms SET playing=?,position=?,updated=? WHERE id=?',(int(playing),position,time.time(),rid))
    elif action=='queue':
     if role not in ('owner','dj'):return self.respond(403,{'error':'dj_only'})

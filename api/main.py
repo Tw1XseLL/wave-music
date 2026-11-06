@@ -1,6 +1,6 @@
 import os, json, hmac, hashlib, sqlite3, time, urllib.request, urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, urlsplit, parse_qs, urlencode
 import secrets, threading
 
 TOKEN=os.environ.get("BOT_TOKEN","").strip()
@@ -68,6 +68,7 @@ class Handler(BaseHTTPRequestHandler):
  def do_GET(self):
   if self.path=="/health":return self.respond(200,{"ok":True})
   path=urlsplit(self.path).path
+  if path=='/api/catalog':return self.catalog_get()
   if path=="/api/rooms" or path.startswith("/api/rooms/"):
    return self.room_get(path)
   if self.path!="/api/library":return self.respond(404,{"error":"not_found"})
@@ -80,6 +81,25 @@ class Handler(BaseHTTPRequestHandler):
   size=int(self.headers.get('Content-Length','0'))
   if not 0<size<=8192:raise ValueError('invalid_size')
   return json.loads(self.rfile.read(size))
+ def catalog_get(self):
+  user=verify(self.headers.get('X-Telegram-Init-Data',''))
+  if not user:return self.respond(401,{'error':'unauthorized'})
+  client_id=os.environ.get('JAMENDO_CLIENT_ID','').strip()
+  if not client_id:return self.respond(200,{'tracks':[],'configured':False,'provider':'jamendo'})
+  query=parse_qs(urlsplit(self.path).query).get('q',[''])[0].strip()
+  if not query or len(query)>100:return self.respond(400,{'error':'invalid_query'})
+  url='https://api.jamendo.com/v3.0/tracks/?'+urlencode({'client_id':client_id,'format':'json','limit':25,'search':query,'include':'licenses','audioformat':'mp32'})
+  try:
+   req=urllib.request.Request(url,headers={'User-Agent':'WAVE-Music/1.0'})
+   with urllib.request.urlopen(req,timeout=8) as response:result=json.load(response)
+   if result.get('headers',{}).get('status')!='success':return self.respond(502,{'error':'catalog_provider_error'})
+   tracks=[]
+   for item in result.get('results',[]):
+    audio=item.get('audio','')
+    if not audio.startswith('https://'):continue
+    tracks.append({'id':str(item.get('id','')),'title':item.get('name',''),'artist':item.get('artist_name',''),'url':audio,'image':item.get('image',''),'license_url':item.get('license_ccurl',''),'provider':'Jamendo'})
+   return self.respond(200,{'tracks':tracks,'configured':True,'provider':'jamendo'})
+  except (urllib.error.URLError,ValueError,KeyError,TimeoutError):return self.respond(502,{'error':'catalog_unavailable'})
  def room_get(self,path):
   user=verify(self.headers.get('X-Telegram-Init-Data',''))
   if not user:return self.respond(401,{'error':'unauthorized'})

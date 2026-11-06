@@ -9,18 +9,18 @@ os.makedirs(os.path.dirname(DB),exist_ok=True)
 with sqlite3.connect(DB) as db:
  db.execute("CREATE TABLE IF NOT EXISTS library (user_id INTEGER PRIMARY KEY, favorites TEXT NOT NULL DEFAULT '[]', playlists TEXT NOT NULL DEFAULT '[]')")
 def verify(raw):
- if not TOKEN or not raw or len(raw)>8192:return None
+ if not TOKEN or TOKEN.startswith("${{"):\n  print("AUTH_CONFIG_ERROR: bot token missing or unresolved",flush=True);return None\n if not raw or len(raw)>8192:\n  print("AUTH_ERROR: missing or oversized initData",flush=True);return None
  try:
   params=dict(parse_qsl(raw,keep_blank_values=True,strict_parsing=True))
   received=params.pop("hash","")
   check="\n".join(f"{k}={v}" for k,v in sorted(params.items()))
   secret=hmac.new(b"WebAppData",TOKEN.encode(),hashlib.sha256).digest()
   expected=hmac.new(secret,check.encode(),hashlib.sha256).hexdigest()
-  if not hmac.compare_digest(expected,received):return None
-  if abs(time.time()-int(params.get("auth_date","0")))>86400:return None
+  if not hmac.compare_digest(expected,received):\n   print("AUTH_ERROR: signature mismatch",flush=True);return None
+  if abs(time.time()-int(params.get("auth_date","0")))>86400:\n   print("AUTH_ERROR: expired initData",flush=True);return None
   user=json.loads(params["user"])
   return user if isinstance(user.get("id"),int) else None
- except (ValueError,KeyError,TypeError,json.JSONDecodeError):return None
+ except (ValueError,KeyError,TypeError,json.JSONDecodeError):\n  print("AUTH_ERROR: malformed initData",flush=True);return None
 class Handler(BaseHTTPRequestHandler):
  def respond(self,status,obj):
   payload=json.dumps(obj,ensure_ascii=False).encode()

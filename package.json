@@ -1,0 +1,1 @@
+{"name":"wave-music","version":"1.0.0","private":true,"type":"module","scripts":{"dev":"vite --host 0.0.0.0","build":"tsc && vite build"},"dependencies":{"vite":"^5.4.11","typescript":"^5.7.2","react":"^18.3.1","react-dom":"^18.3.1"},"devDependencies":{"@types/react":"^18.3.12","@types/react-dom":"^18.3.1"}}

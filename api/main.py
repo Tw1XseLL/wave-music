@@ -114,7 +114,7 @@ class Handler(BaseHTTPRequestHandler):
    with urllib.request.urlopen(req,timeout=8) as response:result=json.load(response)
    tracks=[]
    for item in result.get('data',[]):
-    if not isinstance(item,dict) or item.get('is_stream_gated') or item.get('is_unlisted'):continue
+    if not isinstance(item,dict) or item.get('is_stream_gated') or item.get('is_unlisted') or item.get('is_available') is False or item.get('allowed_api_keys'):continue
     track_id=str(item.get('id',''))
     if not track_id or len(track_id)>120:continue
     artwork=item.get('artwork') or {}
@@ -193,7 +193,7 @@ class Handler(BaseHTTPRequestHandler):
     if db.execute('SELECT COUNT(*) FROM room_queue WHERE room_id=?',(rid,)).fetchone()[0]>=100:return self.respond(409,{'error':'queue_full'})
     db.execute('INSERT INTO room_queue VALUES(?,?,?,?,?)',(rid,secrets.token_urlsafe(8),title,artist,source))
    else:return self.respond(404,{'error':'not_found'})
-   db.execute('UPDATE rooms SET updated=? WHERE id=?',(time.time(),rid))
+   # Keep playback clock unchanged when changing roles or queue.
    return self.respond(200,{'ok':True})
  def do_PUT(self):
   if self.path!="/api/library":return self.respond(404,{"error":"not_found"})

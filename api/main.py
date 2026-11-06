@@ -1,6 +1,7 @@
 import os, json, hmac, hashlib, sqlite3, time, urllib.request, urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, urlsplit
+import secrets, threading
 
 TOKEN=os.environ.get("BOT_TOKEN","").strip()
 print("AUTH_CONFIG: token_format="+("valid_shape" if TOKEN.count(":")==1 and TOKEN.split(":")[0].isdigit() else "invalid_shape")+" token_length="+str(len(TOKEN)),flush=True)
@@ -18,6 +19,11 @@ if TOKEN and not TOKEN.startswith("${{"):
 os.makedirs(os.path.dirname(DB),exist_ok=True)
 with sqlite3.connect(DB) as db:
  db.execute("CREATE TABLE IF NOT EXISTS library (user_id INTEGER PRIMARY KEY, favorites TEXT NOT NULL DEFAULT '[]', playlists TEXT NOT NULL DEFAULT '[]')")
+with sqlite3.connect(DB) as db:
+ db.execute("CREATE TABLE IF NOT EXISTS rooms (id TEXT PRIMARY KEY, owner_id INTEGER NOT NULL, title TEXT NOT NULL, visibility TEXT NOT NULL, track TEXT NOT NULL DEFAULT '{}', playing INTEGER NOT NULL DEFAULT 0, position REAL NOT NULL DEFAULT 0, updated REAL NOT NULL DEFAULT 0)")
+ db.execute("CREATE TABLE IF NOT EXISTS room_members (room_id TEXT NOT NULL, user_id INTEGER NOT NULL, role TEXT NOT NULL, PRIMARY KEY(room_id,user_id))")
+ db.execute("CREATE TABLE IF NOT EXISTS room_queue (room_id TEXT NOT NULL, item_id TEXT NOT NULL, title TEXT NOT NULL, artist TEXT NOT NULL, source TEXT NOT NULL, PRIMARY KEY(room_id,item_id))")
+ROOM_LOCK=threading.RLock()
 def user_id_from_token():
  return TOKEN.split(":")[0] if ":" in TOKEN else ""
 def verify(raw):
@@ -53,7 +59,7 @@ class Handler(BaseHTTPRequestHandler):
    self.send_header("Access-Control-Allow-Origin",ORIGIN)
    self.send_header("Vary","Origin")
    self.send_header("Access-Control-Allow-Headers","Content-Type,X-Telegram-Init-Data")
-   self.send_header("Access-Control-Allow-Methods","GET,PUT,OPTIONS")
+   self.send_header("Access-Control-Allow-Methods","GET,POST,PUT,OPTIONS")
   self.end_headers();self.wfile.write(payload)
  def do_OPTIONS(self):
   origin=self.headers.get("Origin","").rstrip("/")
@@ -61,12 +67,83 @@ class Handler(BaseHTTPRequestHandler):
   self.respond(200,{"ok":True})
  def do_GET(self):
   if self.path=="/health":return self.respond(200,{"ok":True})
+  path=urlsplit(self.path).path
+  if path=="/api/rooms" or path.startswith("/api/rooms/"):
+   return self.room_get(path)
   if self.path!="/api/library":return self.respond(404,{"error":"not_found"})
   user=verify(self.headers.get("X-Telegram-Init-Data",""))
   if not user:return self.respond(401,{"error":"unauthorized"})
   with sqlite3.connect(DB) as db:
    row=db.execute("SELECT favorites,playlists FROM library WHERE user_id=?",(user["id"],)).fetchone()
   self.respond(200,{"user":{"id":user["id"],"first_name":user.get("first_name"),"username":user.get("username")},"favorites":json.loads(row[0]) if row else [],"playlists":json.loads(row[1]) if row else []})
+ def read_json(self):
+  size=int(self.headers.get('Content-Length','0'))
+  if not 0<size<=8192:raise ValueError('invalid_size')
+  return json.loads(self.rfile.read(size))
+ def room_get(self,path):
+  user=verify(self.headers.get('X-Telegram-Init-Data',''))
+  if not user:return self.respond(401,{'error':'unauthorized'})
+  uid=user['id']
+  with sqlite3.connect(DB) as db:
+   if path=='/api/rooms':
+    rows=db.execute("SELECT id,title,visibility FROM rooms WHERE visibility='public' OR id IN (SELECT room_id FROM room_members WHERE user_id=?) ORDER BY updated DESC LIMIT 100",(uid,)).fetchall()
+    return self.respond(200,{'rooms':[{'id':x[0],'title':x[1],'visibility':x[2]} for x in rows]})
+   parts=path.strip('/').split('/')
+   if len(parts)!=3:return self.respond(404,{'error':'not_found'})
+   room=db.execute('SELECT id,owner_id,title,visibility,track,playing,position,updated FROM rooms WHERE id=?',(parts[2],)).fetchone()
+   if not room:return self.respond(404,{'error':'not_found'})
+   role=db.execute('SELECT role FROM room_members WHERE room_id=? AND user_id=?',(room[0],uid)).fetchone()
+   if not role:return self.respond(403,{'error':'join_required'})
+   queue=db.execute('SELECT item_id,title,artist,source FROM room_queue WHERE room_id=? ORDER BY rowid',(room[0],)).fetchall()
+   members=db.execute('SELECT user_id,role FROM room_members WHERE room_id=?',(room[0],)).fetchall()
+   return self.respond(200,{'room':{'id':room[0],'owner_id':room[1],'title':room[2],'visibility':room[3],'track':json.loads(room[4]),'playing':bool(room[5]),'position':room[6],'updated':room[7]},'role':role[0],'members':[{'user_id':m[0],'role':m[1]} for m in members],'queue':[{'id':q[0],'title':q[1],'artist':q[2],'source':q[3]} for q in queue]})
+ def do_POST(self):
+  path=urlsplit(self.path).path
+  if path!='/api/rooms' and not path.startswith('/api/rooms/'):return self.respond(404,{'error':'not_found'})
+  user=verify(self.headers.get('X-Telegram-Init-Data',''))
+  if not user:return self.respond(401,{'error':'unauthorized'})
+  try:data=self.read_json()
+  except (ValueError,TypeError,json.JSONDecodeError):return self.respond(400,{'error':'invalid_json'})
+  uid=user['id'];parts=path.strip('/').split('/')
+  with ROOM_LOCK,sqlite3.connect(DB) as db:
+   if path=='/api/rooms':
+    title=data.get('title','Моя комната');visibility=data.get('visibility','private')
+    if not isinstance(title,str) or not 1<=len(title.strip())<=80 or visibility not in ('private','public'):return self.respond(400,{'error':'invalid_room'})
+    rid=secrets.token_urlsafe(9)
+    db.execute('INSERT INTO rooms(id,owner_id,title,visibility,updated) VALUES(?,?,?,?,?)',(rid,uid,title.strip(),visibility,time.time()))
+    db.execute('INSERT INTO room_members VALUES(?,?,?)',(rid,uid,'owner'))
+    return self.respond(201,{'id':rid})
+   if len(parts)!=4:return self.respond(404,{'error':'not_found'})
+   rid,action=parts[2],parts[3]
+   room=db.execute('SELECT owner_id,visibility FROM rooms WHERE id=?',(rid,)).fetchone()
+   if not room:return self.respond(404,{'error':'not_found'})
+   role_row=db.execute('SELECT role FROM room_members WHERE room_id=? AND user_id=?',(rid,uid)).fetchone()
+   role=role_row[0] if role_row else None
+   if action=='join':
+    if role:return self.respond(200,{'role':role})
+    db.execute('INSERT INTO room_members VALUES(?,?,?)',(rid,uid,'listener'))
+    return self.respond(200,{'role':'listener'})
+   if not role:return self.respond(403,{'error':'join_required'})
+   if action=='role':
+    if uid!=room[0]:return self.respond(403,{'error':'owner_only'})
+    target=data.get('user_id');newrole=data.get('role')
+    if type(target)!=int or target==uid or newrole not in ('dj','listener'):return self.respond(400,{'error':'invalid_role'})
+    cursor=db.execute("UPDATE room_members SET role=? WHERE room_id=? AND user_id=? AND role!='owner'",(newrole,rid,target))
+    if not cursor.rowcount:return self.respond(404,{'error':'member_not_found'})
+   elif action=='control':
+    if role not in ('owner','dj'):return self.respond(403,{'error':'dj_only'})
+    playing=data.get('playing');position=data.get('position',0)
+    if type(playing)!=bool or type(position) not in (int,float) or not 0<=position<=86400:return self.respond(400,{'error':'invalid_control'})
+    db.execute('UPDATE rooms SET playing=?,position=?,updated=? WHERE id=?',(int(playing),position,time.time(),rid))
+   elif action=='queue':
+    if role not in ('owner','dj'):return self.respond(403,{'error':'dj_only'})
+    title,artist,source=data.get('title'),data.get('artist'),data.get('source')
+    if not all(isinstance(x,str) and 1<=len(x)<=200 for x in (title,artist,source)) or not source.startswith(('https://','local:')):return self.respond(400,{'error':'invalid_track'})
+    if db.execute('SELECT COUNT(*) FROM room_queue WHERE room_id=?',(rid,)).fetchone()[0]>=100:return self.respond(409,{'error':'queue_full'})
+    db.execute('INSERT INTO room_queue VALUES(?,?,?,?,?)',(rid,secrets.token_urlsafe(8),title,artist,source))
+   else:return self.respond(404,{'error':'not_found'})
+   db.execute('UPDATE rooms SET updated=? WHERE id=?',(time.time(),rid))
+   return self.respond(200,{'ok':True})
  def do_PUT(self):
   if self.path!="/api/library":return self.respond(404,{"error":"not_found"})
   user=verify(self.headers.get("X-Telegram-Init-Data",""))

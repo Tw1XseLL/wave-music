@@ -23,6 +23,9 @@ with sqlite3.connect(DB) as db:
  db.execute("CREATE TABLE IF NOT EXISTS rooms (id TEXT PRIMARY KEY, owner_id INTEGER NOT NULL, title TEXT NOT NULL, visibility TEXT NOT NULL, track TEXT NOT NULL DEFAULT '{}', playing INTEGER NOT NULL DEFAULT 0, position REAL NOT NULL DEFAULT 0, updated REAL NOT NULL DEFAULT 0)")
  db.execute("CREATE TABLE IF NOT EXISTS room_members (room_id TEXT NOT NULL, user_id INTEGER NOT NULL, role TEXT NOT NULL, PRIMARY KEY(room_id,user_id))")
  db.execute("CREATE TABLE IF NOT EXISTS room_queue (room_id TEXT NOT NULL, item_id TEXT NOT NULL, title TEXT NOT NULL, artist TEXT NOT NULL, source TEXT NOT NULL, PRIMARY KEY(room_id,item_id))")
+with sqlite3.connect(DB) as db:
+ db.execute("CREATE TABLE IF NOT EXISTS premium_subscriptions (user_id INTEGER PRIMARY KEY, expires_at INTEGER NOT NULL DEFAULT 0)")
+ db.execute("CREATE TABLE IF NOT EXISTS star_payments (charge_id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, stars INTEGER NOT NULL, created_at INTEGER NOT NULL)")
 ROOM_LOCK=threading.RLock()
 def user_id_from_token():
  return TOKEN.split(":")[0] if ":" in TOKEN else ""
@@ -68,6 +71,13 @@ class Handler(BaseHTTPRequestHandler):
  def do_GET(self):
   if self.path=="/health":return self.respond(200,{"ok":True})
   path=urlsplit(self.path).path
+  if path=='/api/premium':
+   user=verify(self.headers.get('X-Telegram-Init-Data',''))
+   if not user:return self.respond(401,{'error':'unauthorized'})
+   with sqlite3.connect(DB) as db:
+    row=db.execute('SELECT expires_at FROM premium_subscriptions WHERE user_id=?',(user['id'],)).fetchone()
+   expires=row[0] if row else 0
+   return self.respond(200,{'active':expires>int(time.time()),'expires_at':expires})
   if path=='/api/catalog':return self.catalog_get()
   if path=="/api/rooms" or path.startswith("/api/rooms/"):
    return self.room_get(path)
@@ -141,6 +151,7 @@ class Handler(BaseHTTPRequestHandler):
    return self.respond(200,{'room':{'id':room[0],'owner_id':room[1],'title':room[2],'visibility':room[3],'track':json.loads(room[4]),'playing':bool(room[5]),'position':room[6],'updated':room[7],'server_time':time.time(),'effective_position':room[6]+max(0,time.time()-room[7]) if room[5] else room[6]},'role':role[0],'members':[{'user_id':m[0],'role':m[1]} for m in members],'queue':[{'id':q[0],'title':q[1],'artist':q[2],'source':q[3]} for q in queue]})
  def do_POST(self):
   path=urlsplit(self.path).path
+  if path=='/api/internal/stars':return self.stars_payment()
   if path!='/api/rooms' and not path.startswith('/api/rooms/'):return self.respond(404,{'error':'not_found'})
   user=verify(self.headers.get('X-Telegram-Init-Data',''))
   if not user:return self.respond(401,{'error':'unauthorized'})
@@ -195,6 +206,27 @@ class Handler(BaseHTTPRequestHandler):
    else:return self.respond(404,{'error':'not_found'})
    # Keep playback clock unchanged when changing roles or queue.
    return self.respond(200,{'ok':True})
+ def stars_payment(self):
+  try:
+   raw_size=int(self.headers.get('Content-Length','0'))
+   if not 0<raw_size<=4096:raise ValueError()
+   raw=self.rfile.read(raw_size)
+   supplied=self.headers.get('X-Wave-Signature','')
+   expected=hmac.new(TOKEN.encode(),raw,hashlib.sha256).hexdigest()
+   if not TOKEN or not hmac.compare_digest(supplied,expected):return self.respond(403,{'error':'forbidden'})
+   data=json.loads(raw)
+   uid,charge,stars,paid_at=data['user_id'],data['charge_id'],data['stars'],data['paid_at']
+   if type(uid)!=int or uid<=0 or type(charge)!=str or not 1<=len(charge)<=200 or type(stars)!=int or stars!=159 or type(paid_at)!=int or abs(time.time()-paid_at)>300:raise ValueError()
+   with ROOM_LOCK,sqlite3.connect(DB) as db:
+    db.execute('BEGIN IMMEDIATE')
+    existing=db.execute('SELECT user_id FROM star_payments WHERE charge_id=?',(charge,)).fetchone()
+    if existing:return self.respond(200,{'ok':True,'duplicate':True})
+    db.execute('INSERT INTO star_payments VALUES(?,?,?,?)',(charge,uid,stars,paid_at))
+    row=db.execute('SELECT expires_at FROM premium_subscriptions WHERE user_id=?',(uid,)).fetchone()
+    expiry=max(int(time.time()),row[0] if row else 0)+30*86400
+    db.execute('INSERT INTO premium_subscriptions VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET expires_at=excluded.expires_at',(uid,expiry))
+   return self.respond(200,{'ok':True,'expires_at':expiry})
+  except (ValueError,TypeError,KeyError,OverflowError,json.JSONDecodeError):return self.respond(400,{'error':'invalid_payment'})
  def do_PUT(self):
   if self.path!="/api/library":return self.respond(404,{"error":"not_found"})
   user=verify(self.headers.get("X-Telegram-Init-Data",""))

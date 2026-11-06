@@ -1,11 +1,18 @@
 import logging
 import os
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp, Update, WebAppInfo, InputMediaPhoto
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+import json
+import time
+import hmac
+import hashlib
+import asyncio
+import urllib.request
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp, Update, WebAppInfo, InputMediaPhoto, LabeledPrice
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, PreCheckoutQueryHandler, MessageHandler, filters
 
 logging.basicConfig(level=logging.INFO)
 URL = os.getenv("WEB_APP_URL", "https://wave-web-production.up.railway.app")
 TOKEN = os.getenv("BOT_TOKEN", "").strip()
+API_URL = os.getenv('WAVE_API_URL', 'https://wave-api-production-c0c4.up.railway.app').rstrip('/')
 ADMIN_ID = int(os.getenv("PAYMENT_ADMIN_ID", "0") or 0)
 PAYMENT_INSTRUCTIONS = os.getenv("PAYMENT_INSTRUCTIONS", "").strip()
 PREVIEW_PHOTOS = [u.strip() for u in os.getenv("PREVIEW_PHOTO_URLS", "").split(",") if u.strip().startswith("https://")][:4]
@@ -41,31 +48,57 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def premium_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if not ADMIN_ID or not PAYMENT_INSTRUCTIONS:
-        await query.message.reply_text("💎 Premium готовится к запуску. Приём платежей пока не открыт.")
-        return
-    await query.message.reply_text(
-        "💎 WAVE Premium\n\n" + PAYMENT_INSTRUCTIONS +
-        "\n\nОплата проверяется вручную. Не отправляй данные банковской карты или пароли. "
-        "После оплаты нажми «Я оплатил», чтобы связаться с администратором.",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📨 Я оплатил", callback_data="payment_request")]])
+    await query.message.reply_invoice(
+        title="WAVE Premium — 30 дней",
+        description="30 дней Premium-доступа WAVE Music. Подписка продлевается только после новой оплаты.",
+        payload=f"wave_premium_30:{query.from_user.id}",
+        currency="XTR",
+        prices=[LabeledPrice(label="WAVE Premium — 30 дней", amount=159)],
+        provider_token="",
     )
 
-async def payment_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if not ADMIN_ID or not PAYMENT_INSTRUCTIONS:
-        await query.message.reply_text("Приём платежей пока не открыт.")
-        return
-    user = query.from_user
-    await context.bot.send_message(
-        chat_id=ADMIN_ID,
-        text=f"💎 Запрос на проверку оплаты WAVE Music\nUser ID: {user.id}\nUsername: @{user.username or 'нет'}\n"
-             "Проверь фактическое поступление денег независимо от сообщений пользователя. "
-             "Подписка автоматически не активируется."
+async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.pre_checkout_query
+    valid = (query.currency == "XTR" and query.total_amount == 159
+             and query.invoice_payload == f"wave_premium_30:{query.from_user.id}")
+    await query.answer(ok=valid, error_message=None if valid else "Параметры платежа не совпадают.")
+
+def save_stars_payment(user_id: int, charge_id: str):
+    payload = json.dumps({"user_id": user_id, "charge_id": charge_id, "stars": 159,
+                          "paid_at": int(time.time())}, separators=(",", ":")).encode()
+    signature = hmac.new(TOKEN.encode(), payload, hashlib.sha256).hexdigest()
+    request = urllib.request.Request(
+        API_URL + "/api/internal/stars", data=payload,
+        headers={"Content-Type": "application/json", "X-Wave-Signature": signature},
+        method="POST",
     )
-    await query.message.reply_text("📨 Запрос отправлен администратору. Сохрани подтверждение платежа. "
-                                   "Premium пока не активирован — дождись проверки.")
+    with urllib.request.urlopen(request, timeout=12) as response:
+        return json.load(response)
+
+async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    payment = update.effective_message.successful_payment
+    if not payment or payment.currency != "XTR" or payment.total_amount != 159:
+        return
+    if payment.invoice_payload != f"wave_premium_30:{update.effective_user.id}":
+        logging.error("Unexpected Stars payment payload")
+        return
+    try:
+        result = await asyncio.to_thread(
+            save_stars_payment, update.effective_user.id, payment.telegram_payment_charge_id
+        )
+        if not result.get("ok"):
+            raise RuntimeError("API did not confirm payment")
+        await update.effective_message.reply_text(
+            "✅ Оплата 159 ⭐ получена! Premium активирован на 30 дней. "
+            "Открой WAVE Music, чтобы продолжить.", reply_markup=main_keyboard()
+        )
+    except Exception:
+        logging.exception("Payment recorded by Telegram but Premium activation failed")
+        await update.effective_message.reply_text(
+            "⭐ Telegram подтвердил оплату, но активация пока не завершилась. "
+            "Обратись в поддержку с идентификатором платежа: " +
+            payment.telegram_payment_charge_id
+        )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text("Нажми /start, чтобы открыть WAVE Music или узнать о Premium.")
@@ -78,7 +111,8 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CallbackQueryHandler(premium_info, pattern="^premium_info$"))
-    app.add_handler(CallbackQueryHandler(payment_request, pattern="^payment_request$"))
+    app.add_handler(PreCheckoutQueryHandler(precheckout))
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":

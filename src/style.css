@@ -38,3 +38,5 @@
 .catalog-playable input{accent-color:#a271fa;width:17px;height:17px}
 
 .jamendo-credit{display:flex;flex-wrap:wrap;gap:7px 14px;margin:10px 0 16px;color:#d4c8eb;font-size:12px}.jamendo-credit a{color:#c9aaff;text-decoration:underline;text-underline-offset:3px}
+
+.official-search{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:12px 0 18px}.official-search p{flex-basis:100%;margin:0 0 3px}.official-search button{border:1px solid #78629b;border-radius:16px;background:#28203d;color:white;padding:10px 14px;min-height:42px}

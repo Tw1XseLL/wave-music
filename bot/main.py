@@ -7,6 +7,8 @@ import hashlib
 import asyncio
 import re
 import urllib.request
+from urllib.parse import urlencode
+from datetime import datetime, timezone
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp, Update, WebAppInfo, InputMediaPhoto, LabeledPrice
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, PreCheckoutQueryHandler, MessageHandler, filters
 
@@ -35,6 +37,7 @@ def preview_api(method='GET', photos=None):
 def main_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🎧 Открыть WAVE Music", web_app=WebAppInfo(url=URL))],
+        [InlineKeyboardButton("👤 Мой профиль", callback_data="profile")],
         [InlineKeyboardButton("💎 Подписка Premium", callback_data="premium_info")],
         [InlineKeyboardButton("ℹ️ О WAVE Music", callback_data="about"), InlineKeyboardButton("❓ Помощь", callback_data="help_info")],
         [InlineKeyboardButton("💬 Поддержка", callback_data="support_start")],
@@ -219,12 +222,48 @@ async def support_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.exception("Support ticket delivery failed")
         await message.reply_text("❌ Не удалось отправить обращение. Попробуй позже.")
 
+def premium_status_api(user_id: int):
+    signature = hmac.new(TOKEN.encode(), f"premium-read:{user_id}".encode(), hashlib.sha256).hexdigest()
+    request = urllib.request.Request(
+        API_URL + "/api/internal/premium?" + urlencode({"user_id": user_id}),
+        headers={"X-Wave-Signature": signature},
+    )
+    with urllib.request.urlopen(request, timeout=12) as response:
+        return json.load(response)
+
+async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user:
+        return
+    name = user.full_name or "Пользователь"
+    try:
+        premium = await asyncio.to_thread(premium_status_api, user.id)
+        expires = int(premium.get("expires_at") or 0)
+        active = bool(premium.get("active"))
+        if active:
+            end_date = datetime.fromtimestamp(expires, timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
+            status = f"💎 Premium активен до {end_date}"
+        else:
+            status = "🎵 Бесплатный аккаунт"
+    except Exception:
+        logging.exception("Profile Premium status unavailable")
+        status = "⚠️ Не удалось проверить Premium. Попробуй позже."
+    await update.effective_message.reply_text(
+        f"👤 Профиль WAVE Music\\n\\n"
+        f"Имя: {name}\\n"
+        f"Telegram ID: {user.id}\\n"
+        f"Статус: {status}\\n\\n"
+        "Управление музыкой и комнатами доступно в приложении.",
+        reply_markup=main_keyboard(),
+    )
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text(
         '❓ Помощь WAVE Music\n\n'
         '/start — приветствие и запуск приложения\n'
         '/about — информация о сервисе\n'
         '/premium — оформить Premium за 159 ⭐ на 30 дней\n'
+        '/profile — профиль и статус подписки\n'
         '/support — написать в поддержку\n'
         '/cancel — отменить обращение\n'
         '/help — список команд\n\n'
@@ -255,6 +294,8 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await help_command(update, context)
     elif query.data=='support_start':
         await support_command(update, context)
+    elif query.data=='profile':
+        await profile_command(update, context)
 
 async def post_init(application: Application):
     await application.bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="🎧 WAVE Music", web_app=WebAppInfo(url=URL)))
@@ -265,13 +306,14 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("about", about_command))
     app.add_handler(CommandHandler("premium", premium_command))
+    app.add_handler(CommandHandler("profile", profile_command))
     app.add_handler(CommandHandler("support", support_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
     app.add_handler(CommandHandler("setpreview", setpreview))
     app.add_handler(CommandHandler("clearpreviews", clearpreviews))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, support_messages))
     app.add_handler(CallbackQueryHandler(premium_info, pattern="^premium_info$"))
-    app.add_handler(CallbackQueryHandler(menu_callback, pattern="^(about|help_info|support_start)$"))
+    app.add_handler(CallbackQueryHandler(menu_callback, pattern="^(about|help_info|support_start|profile)$"))
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
     app.run_polling(drop_pending_updates=True)

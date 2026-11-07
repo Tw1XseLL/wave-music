@@ -163,6 +163,10 @@ async def premium_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         currency="XTR",
         prices=[LabeledPrice(label="WAVE Premium — 30 дней", amount=159)],
         provider_token="",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("⭐ Оплатить 159 Stars", pay=True)],
+            [InlineKeyboardButton("⬅️ Назад в главное меню", callback_data="main_menu")],
+        ]),
     )
 
 async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE):

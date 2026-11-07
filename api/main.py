@@ -30,6 +30,9 @@ with sqlite3.connect(DB) as db:
  db.execute("CREATE TABLE IF NOT EXISTS bot_preview (position INTEGER PRIMARY KEY, file_id TEXT NOT NULL)")
 with sqlite3.connect(DB) as db:
  db.execute("CREATE TABLE IF NOT EXISTS bot_notifications (user_id INTEGER PRIMARY KEY, news INTEGER NOT NULL DEFAULT 1, premium INTEGER NOT NULL DEFAULT 1)")
+with sqlite3.connect(DB) as db:
+ db.execute("CREATE TABLE IF NOT EXISTS bot_subscribers (user_id INTEGER PRIMARY KEY, registered_at INTEGER NOT NULL)")
+ db.execute("CREATE TABLE IF NOT EXISTS premium_reminders (user_id INTEGER NOT NULL, expires_at INTEGER NOT NULL, sent_at INTEGER NOT NULL, PRIMARY KEY(user_id,expires_at))")
 ROOM_LOCK=threading.RLock()
 def user_id_from_token():
  return TOKEN.split(":")[0] if ":" in TOKEN else ""
@@ -80,6 +83,21 @@ class Handler(BaseHTTPRequestHandler):
    if not TOKEN or not hmac.compare_digest(self.headers.get('X-Wave-Signature',''),expected):return self.respond(403,{'error':'forbidden'})
    with sqlite3.connect(DB) as db:rows=db.execute('SELECT file_id FROM bot_preview ORDER BY position LIMIT 4').fetchall()
    return self.respond(200,{'photos':[r[0] for r in rows]})
+  if path=='/api/internal/premium-due':
+   expected=hmac.new(TOKEN.encode(),b'premium-due',hashlib.sha256).hexdigest()
+   if not TOKEN or not hmac.compare_digest(self.headers.get('X-Wave-Signature',''),expected):return self.respond(403,{'error':'forbidden'})
+   now=int(time.time())
+   with sqlite3.connect(DB) as db:
+    rows=db.execute('SELECT p.user_id,p.expires_at FROM premium_subscriptions p JOIN bot_subscribers s ON s.user_id=p.user_id LEFT JOIN bot_notifications n ON n.user_id=p.user_id WHERE p.expires_at>? AND p.expires_at<=? AND COALESCE(n.premium,1)=1 AND NOT EXISTS(SELECT 1 FROM premium_reminders r WHERE r.user_id=p.user_id AND r.expires_at=p.expires_at) LIMIT 200',(now,now+86400)).fetchall()
+   return self.respond(200,{'due':[{'user_id':r[0],'expires_at':r[1]} for r in rows]})
+  if path=='/api/internal/notification-recipients':
+   kind=parse_qs(urlsplit(self.path).query).get('kind',[''])[0]
+   if kind not in ('news','premium'):return self.respond(400,{'error':'invalid_kind'})
+   expected=hmac.new(TOKEN.encode(),f'recipients:{kind}'.encode(),hashlib.sha256).hexdigest()
+   if not TOKEN or not hmac.compare_digest(self.headers.get('X-Wave-Signature',''),expected):return self.respond(403,{'error':'forbidden'})
+   with sqlite3.connect(DB) as db:
+    rows=db.execute('SELECT s.user_id FROM bot_subscribers s LEFT JOIN bot_notifications n ON n.user_id=s.user_id WHERE COALESCE(n.'+kind+',1)=1').fetchall()
+   return self.respond(200,{'users':[r[0] for r in rows]})
   if path=='/api/internal/notifications':
    query=parse_qs(urlsplit(self.path).query)
    try:uid=int(query.get('user_id',[''])[0])
@@ -181,6 +199,32 @@ class Handler(BaseHTTPRequestHandler):
    return self.respond(200,{'room':{'id':room[0],'owner_id':room[1],'title':room[2],'visibility':room[3],'track':json.loads(room[4]),'playing':bool(room[5]),'position':room[6],'updated':room[7],'server_time':time.time(),'effective_position':room[6]+max(0,time.time()-room[7]) if room[5] else room[6]},'role':role[0],'members':[{'user_id':m[0],'role':m[1]} for m in members],'queue':[{'id':q[0],'title':q[1],'artist':q[2],'source':q[3]} for q in queue]})
  def do_POST(self):
   path=urlsplit(self.path).path
+  if path=='/api/internal/reminder-claim':
+   try:data=self.read_json()
+   except (ValueError,TypeError,json.JSONDecodeError):return self.respond(400,{'error':'invalid_json'})
+   uid=data.get('user_id');expires=data.get('expires_at')
+   if type(uid)!=int or uid<=0 or type(expires)!=int or expires<=0:return self.respond(400,{'error':'invalid_request'})
+   payload=json.dumps(data,separators=(',',':')).encode()
+   expected=hmac.new(TOKEN.encode(),payload,hashlib.sha256).hexdigest()
+   if not TOKEN or not hmac.compare_digest(self.headers.get('X-Wave-Signature',''),expected):return self.respond(403,{'error':'forbidden'})
+   now=int(time.time())
+   with sqlite3.connect(DB) as db:
+    row=db.execute('SELECT expires_at FROM premium_subscriptions WHERE user_id=?',(uid,)).fetchone()
+    enabled=db.execute('SELECT premium FROM bot_notifications WHERE user_id=?',(uid,)).fetchone()
+    subscribed=db.execute('SELECT 1 FROM bot_subscribers WHERE user_id=?',(uid,)).fetchone()
+    if not row or row[0]!=expires or not subscribed or (enabled and not enabled[0]) or not 0<expires-now<=86400:return self.respond(200,{'claimed':False})
+    cursor=db.execute('INSERT OR IGNORE INTO premium_reminders(user_id,expires_at,sent_at) VALUES(?,?,?)',(uid,expires,now))
+   return self.respond(200,{'claimed':cursor.rowcount==1})
+  if path=='/api/internal/subscribe':
+   try:data=self.read_json()
+   except (ValueError,TypeError,json.JSONDecodeError):return self.respond(400,{'error':'invalid_json'})
+   uid=data.get('user_id')
+   if type(uid)!=int or uid<=0:return self.respond(400,{'error':'invalid_user'})
+   payload=json.dumps(data,separators=(',',':')).encode()
+   expected=hmac.new(TOKEN.encode(),payload,hashlib.sha256).hexdigest()
+   if not TOKEN or not hmac.compare_digest(self.headers.get('X-Wave-Signature',''),expected):return self.respond(403,{'error':'forbidden'})
+   with sqlite3.connect(DB) as db:db.execute('INSERT OR IGNORE INTO bot_subscribers VALUES(?,?)',(uid,int(time.time())))
+   return self.respond(200,{'ok':True})
   if path=='/api/internal/notifications':
    try:data=self.read_json()
    except (ValueError,TypeError,json.JSONDecodeError):return self.respond(400,{'error':'invalid_json'})

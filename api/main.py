@@ -78,6 +78,17 @@ class Handler(BaseHTTPRequestHandler):
    if not TOKEN or not hmac.compare_digest(self.headers.get('X-Wave-Signature',''),expected):return self.respond(403,{'error':'forbidden'})
    with sqlite3.connect(DB) as db:rows=db.execute('SELECT file_id FROM bot_preview ORDER BY position LIMIT 4').fetchall()
    return self.respond(200,{'photos':[r[0] for r in rows]})
+  if path=='/api/internal/premium':
+   query=parse_qs(urlsplit(self.path).query)
+   try:uid=int(query.get('user_id',[''])[0])
+   except (ValueError,TypeError):return self.respond(400,{'error':'invalid_user'})
+   if uid<=0:return self.respond(400,{'error':'invalid_user'})
+   expected=hmac.new(TOKEN.encode(),f'premium-read:{uid}'.encode(),hashlib.sha256).hexdigest()
+   if not TOKEN or not hmac.compare_digest(self.headers.get('X-Wave-Signature',''),expected):return self.respond(403,{'error':'forbidden'})
+   with sqlite3.connect(DB) as db:
+    row=db.execute('SELECT expires_at FROM premium_subscriptions WHERE user_id=?',(uid,)).fetchone()
+   expires=row[0] if row else 0
+   return self.respond(200,{'active':expires>int(time.time()),'expires_at':expires})
   if path=='/api/premium':
    user=verify(self.headers.get('X-Telegram-Init-Data',''))
    if not user:return self.respond(401,{'error':'unauthorized'})

@@ -1,6 +1,6 @@
 import os, json, hmac, hashlib, sqlite3, time, urllib.request, urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qsl, urlsplit, parse_qs, urlencode
+from urllib.parse import parse_qsl, urlsplit, parse_qs, urlencode, unquote
 import secrets, threading
 
 TOKEN=os.environ.get("BOT_TOKEN","").strip()
@@ -229,7 +229,7 @@ class Handler(BaseHTTPRequestHandler):
    try:
     size=int(self.headers.get('Content-Length','0'))
     if not 128<=size<=15*1024*1024:return self.respond(413,{'error':'file_too_large'})
-    title=self.headers.get('X-Track-Title','').strip()
+    title=unquote(self.headers.get('X-Track-Title','')).strip()
     artist=self.headers.get('X-Track-Artist','').strip()
     if not title or len(title)>150 or artist!='Khast':return self.respond(400,{'error':'invalid_metadata'})
     raw=self.rfile.read(size)

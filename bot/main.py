@@ -35,14 +35,6 @@ def main_keyboard():
     ])
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.effective_message.reply_text(
-        "🌊 Добро пожаловать в WAVE Music! 🎧\n\n"
-        "🎶 Твоя музыка. Твой ритм. Твоя волна.\n\n"
-        "👥 Создавай музыкальные комнаты, приглашай друзей и слушайте музыку вместе.\n"
-        "🎛 Назначай DJ и управляй очередью треков.\n\n"
-        "Нажми кнопку, чтобы открыть приложение прямо в Telegram.",
-        reply_markup=main_keyboard(),
-    )
     try:
         saved = await asyncio.to_thread(preview_api)
         photos = saved.get('photos') or PREVIEW_PHOTOS
@@ -59,6 +51,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
         except Exception:
             logging.exception("Unable to send preview screenshots")
+
+    await update.effective_message.reply_text(
+        "🌊 Добро пожаловать в WAVE Music! 🎧\n\n"
+        "🎶 Твоя музыка. Твой ритм. Твоя волна.\n\n"
+        "👥 Создавай музыкальные комнаты, приглашай друзей и слушайте музыку вместе.\n"
+        "🎛 Назначай DJ и управляй очередью треков.\n\n"
+        "Нажми кнопку, чтобы открыть приложение прямо в Telegram.",
+        reply_markup=main_keyboard(),
+    )
 
 async def premium_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query

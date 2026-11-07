@@ -5,6 +5,7 @@ import time
 import hmac
 import hashlib
 import asyncio
+import re
 import urllib.request
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp, Update, WebAppInfo, InputMediaPhoto, LabeledPrice
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, PreCheckoutQueryHandler, MessageHandler, filters
@@ -36,6 +37,7 @@ def main_keyboard():
         [InlineKeyboardButton("🎧 Открыть WAVE Music", web_app=WebAppInfo(url=URL))],
         [InlineKeyboardButton("💎 Подписка Premium", callback_data="premium_info")],
         [InlineKeyboardButton("ℹ️ О WAVE Music", callback_data="about"), InlineKeyboardButton("❓ Помощь", callback_data="help_info")],
+        [InlineKeyboardButton("💬 Поддержка", callback_data="support_start")],
     ])
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -152,12 +154,79 @@ async def clearpreviews(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         logging.exception('Failed to clear previews')
 
+async def support_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not ADMIN_ID:
+        await update.effective_message.reply_text("Поддержка временно недоступна. Попробуй позже.")
+        return
+    context.user_data["support_mode"] = True
+    await update.effective_message.reply_text(
+        "💬 Поддержка WAVE Music\\n\\nОпиши проблему одним текстовым сообщением (до 3000 символов). "
+        "Не отправляй пароли, коды входа или данные банковской карты.\\n\\n"
+        "Для отмены отправь /cancel.")
+
+async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.pop("support_mode", None)
+    await update.effective_message.reply_text("Обращение отменено.", reply_markup=main_keyboard())
+
+async def support_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.effective_message
+    user = update.effective_user
+    if not message or not message.text or not user:
+        return
+    if user.id == ADMIN_ID and message.reply_to_message:
+        original = message.reply_to_message.text or ""
+        match = re.match(r"^🎫 WAVE SUPPORT\\nUser ID: (\\d+)\\n", original)
+        if match:
+            target = int(match.group(1))
+            if target == ADMIN_ID:
+                return
+            try:
+                await context.bot.send_message(
+                    chat_id=target,
+                    text="💬 Ответ поддержки WAVE Music:\\n\\n" + message.text[:3500],
+                )
+                await message.reply_text("✅ Ответ доставлен пользователю.")
+            except Exception:
+                logging.exception("Support response delivery failed")
+                await message.reply_text("❌ Не удалось доставить ответ. Возможно, пользователь заблокировал бота.")
+            return
+    if not context.user_data.get("support_mode"):
+        return
+    if user.id == ADMIN_ID:
+        context.user_data.pop("support_mode", None)
+        await message.reply_text("Администратору не нужно создавать обращение самому.")
+        return
+    if not 1 <= len(message.text.strip()) <= 3000:
+        await message.reply_text("Напиши сообщение длиной от 1 до 3000 символов.")
+        return
+    last = context.user_data.get("support_last_sent", 0)
+    if time.time() - last < 60:
+        await message.reply_text("Следующее обращение можно отправить через минуту.")
+        return
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=f"🎫 WAVE SUPPORT\\nUser ID: {user.id}\\n\\n"
+                 f"Сообщение пользователя:\\n{message.text.strip()}",
+        )
+        context.user_data["support_last_sent"] = time.time()
+        context.user_data.pop("support_mode", None)
+        await message.reply_text(
+            "✅ Обращение отправлено! Администратор ответит здесь, в этом чате.",
+            reply_markup=main_keyboard(),
+        )
+    except Exception:
+        logging.exception("Support ticket delivery failed")
+        await message.reply_text("❌ Не удалось отправить обращение. Попробуй позже.")
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text(
         '❓ Помощь WAVE Music\\n\\n'
         '/start — приветствие и запуск приложения\\n'
         '/about — информация о сервисе\\n'
         '/premium — оформить Premium за 159 ⭐ на 30 дней\\n'
+        '/support — написать в поддержку\\n'
+        '/cancel — отменить обращение\\n'
         '/help — список команд\\n\\n'
         'Если музыка не запускается, проверь подключение и доступность аудиоисточника.',
         reply_markup=main_keyboard())
@@ -184,6 +253,8 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await about_command(update, context)
     elif query.data=='help_info':
         await help_command(update, context)
+    elif query.data=='support_start':
+        await support_command(update, context)
 
 async def post_init(application: Application):
     await application.bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="🎧 WAVE Music", web_app=WebAppInfo(url=URL)))
@@ -194,11 +265,13 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("about", about_command))
     app.add_handler(CommandHandler("premium", premium_command))
+    app.add_handler(CommandHandler("support", support_command))
+    app.add_handler(CommandHandler("cancel", cancel_command))
     app.add_handler(CommandHandler("setpreview", setpreview))
     app.add_handler(CommandHandler("clearpreviews", clearpreviews))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, preview_command_fallback))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, support_messages))
     app.add_handler(CallbackQueryHandler(premium_info, pattern="^premium_info$"))
-    app.add_handler(CallbackQueryHandler(menu_callback, pattern="^(about|help_info)$"))
+    app.add_handler(CallbackQueryHandler(menu_callback, pattern="^(about|help_info|support_start)$"))
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
     app.run_polling(drop_pending_updates=True)

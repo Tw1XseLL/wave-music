@@ -9,7 +9,7 @@ import re
 import urllib.request
 from urllib.parse import urlencode
 from datetime import datetime, timezone
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp, Update, WebAppInfo, InputMediaPhoto, LabeledPrice
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp, Update, WebAppInfo, InputMediaPhoto, LabeledPrice, ForceReply, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, PreCheckoutQueryHandler, MessageHandler, filters
 
 logging.basicConfig(level=logging.INFO)
@@ -247,11 +247,14 @@ async def support_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text(
         "💬 Поддержка WAVE Music\n\nОпиши проблему одним текстовым сообщением (до 3000 символов). "
         "Не отправляй пароли, коды входа или данные банковской карты.\n\n"
-        "Для отмены отправь /cancel.")
+        "Для отмены отправь /cancel.",
+        reply_markup=ForceReply(selective=True, input_field_placeholder="Опиши проблему для поддержки…"),
+    )
 
 async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("support_mode", None)
-    await update.effective_message.reply_text("Обращение отменено.", reply_markup=main_keyboard())
+    await update.effective_message.reply_text("Обращение отменено.", reply_markup=ReplyKeyboardRemove())
+    await update.effective_message.reply_text("🌊 Главное меню", reply_markup=main_keyboard())
 
 async def support_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.effective_message
@@ -277,6 +280,11 @@ async def support_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await message.reply_text("❌ Не удалось доставить ответ. Возможно, пользователь заблокировал бота.")
             return
     if not context.user_data.get("support_mode"):
+        return
+    # Only accept the response to the support prompt; other chat messages stay outside the ticket flow.
+    prompt = message.reply_to_message
+    if not prompt or not prompt.from_user or prompt.from_user.id != context.bot.id or not (prompt.text or "").startswith("💬 Поддержка WAVE Music"):
+        await message.reply_text("Чтобы отправить обращение, ответь на сообщение «💬 Поддержка WAVE Music» или начни заново через /support.")
         return
     if not 1 <= len(message.text.strip()) <= 3000:
         await message.reply_text("Напиши сообщение длиной от 1 до 3000 символов.")

@@ -194,7 +194,13 @@ async def support_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if user.id == ADMIN_ID:
         context.user_data.pop("support_mode", None)
-        await message.reply_text("Администратору не нужно создавать обращение самому.")
+        await message.reply_text(
+            "🧪 Тест поддержки пройден! Сообщение принято.\\n\\n"
+            "В обычном режиме обращения пользователей приходят сюда, "
+            "а ты отвечаешь на сообщение с заявкой через функцию «Ответить».\\n\\n"
+            "Для полноценной проверки доставки ответа нужен второй Telegram-аккаунт.",
+            reply_markup=main_keyboard(),
+        )
         return
     if not 1 <= len(message.text.strip()) <= 3000:
         await message.reply_text("Напиши сообщение длиной от 1 до 3000 символов.")

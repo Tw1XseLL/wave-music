@@ -33,6 +33,11 @@ with sqlite3.connect(DB) as db:
 with sqlite3.connect(DB) as db:
  db.execute("CREATE TABLE IF NOT EXISTS bot_subscribers (user_id INTEGER PRIMARY KEY, registered_at INTEGER NOT NULL)")
  db.execute("CREATE TABLE IF NOT EXISTS premium_reminders (user_id INTEGER NOT NULL, expires_at INTEGER NOT NULL, sent_at INTEGER NOT NULL, PRIMARY KEY(user_id,expires_at))")
+with sqlite3.connect(DB) as db:
+ db.execute("CREATE TABLE IF NOT EXISTS artist_tracks (id TEXT PRIMARY KEY, title TEXT NOT NULL, artist TEXT NOT NULL, filename TEXT NOT NULL, uploaded_at INTEGER NOT NULL)")
+ARTIST_USER_ID=int(os.environ.get('WAVE_ARTIST_USER_ID','956548293'))
+TRACK_DIR=os.path.join(os.path.dirname(DB),'artist_tracks')
+os.makedirs(TRACK_DIR,exist_ok=True)
 ROOM_LOCK=threading.RLock()
 def user_id_from_token():
  return TOKEN.split(":")[0] if ":" in TOKEN else ""
@@ -68,7 +73,7 @@ class Handler(BaseHTTPRequestHandler):
   if self.headers.get("Origin","").rstrip("/")==ORIGIN:
    self.send_header("Access-Control-Allow-Origin",ORIGIN)
    self.send_header("Vary","Origin")
-   self.send_header("Access-Control-Allow-Headers","Content-Type,X-Telegram-Init-Data")
+   self.send_header("Access-Control-Allow-Headers","Content-Type,X-Telegram-Init-Data,X-Track-Title,X-Track-Artist")
    self.send_header("Access-Control-Allow-Methods","GET,POST,PUT,OPTIONS")
   self.end_headers();self.wfile.write(payload)
  def do_OPTIONS(self):
@@ -126,6 +131,24 @@ class Handler(BaseHTTPRequestHandler):
     row=db.execute('SELECT expires_at FROM premium_subscriptions WHERE user_id=?',(user['id'],)).fetchone()
    expires=row[0] if row else 0
    return self.respond(200,{'active':expires>int(time.time()),'expires_at':expires})
+  if path=='/api/artist-tracks':
+   with sqlite3.connect(DB) as db: rows=db.execute('SELECT id,title,artist FROM artist_tracks ORDER BY uploaded_at DESC LIMIT 100').fetchall()
+   return self.respond(200,{'tracks':[{'id':x[0],'title':x[1],'artist':x[2],'url':'/api/artist-tracks/'+x[0]} for x in rows]})
+  if path.startswith('/api/artist-tracks/'):
+   track_id=path.rsplit('/',1)[-1]
+   with sqlite3.connect(DB) as db: row=db.execute('SELECT filename FROM artist_tracks WHERE id=?',(track_id,)).fetchone()
+   if not row:return self.respond(404,{'error':'not_found'})
+   filename=os.path.join(TRACK_DIR,row[0])
+   try:
+    size=os.path.getsize(filename)
+    self.send_response(200);self.send_header('Content-Type','audio/mpeg');self.send_header('Content-Length',str(size));self.send_header('Accept-Ranges','none');self.send_header('Cache-Control','public, max-age=3600');self.end_headers()
+    with open(filename,'rb') as f:
+     while True:
+      chunk=f.read(65536)
+      if not chunk:break
+      self.wfile.write(chunk)
+   except (FileNotFoundError,BrokenPipeError,ConnectionResetError):pass
+   return
   if path=='/api/catalog':return self.catalog_get()
   if path=="/api/rooms" or path.startswith("/api/rooms/"):
    return self.room_get(path)
@@ -199,6 +222,23 @@ class Handler(BaseHTTPRequestHandler):
    return self.respond(200,{'room':{'id':room[0],'owner_id':room[1],'title':room[2],'visibility':room[3],'track':json.loads(room[4]),'playing':bool(room[5]),'position':room[6],'updated':room[7],'server_time':time.time(),'effective_position':room[6]+max(0,time.time()-room[7]) if room[5] else room[6]},'role':role[0],'members':[{'user_id':m[0],'role':m[1]} for m in members],'queue':[{'id':q[0],'title':q[1],'artist':q[2],'source':q[3]} for q in queue]})
  def do_POST(self):
   path=urlsplit(self.path).path
+  if path=='/api/artist-tracks':
+   user=verify(self.headers.get('X-Telegram-Init-Data',''))
+   if not user:return self.respond(401,{'error':'unauthorized'})
+   if user['id']!=ARTIST_USER_ID:return self.respond(403,{'error':'artist_only'})
+   try:
+    size=int(self.headers.get('Content-Length','0'))
+    if not 128<=size<=15*1024*1024:return self.respond(413,{'error':'file_too_large'})
+    title=self.headers.get('X-Track-Title','').strip()
+    artist=self.headers.get('X-Track-Artist','').strip()
+    if not title or len(title)>150 or artist!='Khast':return self.respond(400,{'error':'invalid_metadata'})
+    raw=self.rfile.read(size)
+    if len(raw)!=size or not (raw.startswith(b'ID3') or raw[:2] in (b'\\xff\\xfb',b'\\xff\\xf3',b'\\xff\\xf2')):return self.respond(400,{'error':'invalid_mp3'})
+    track_id=secrets.token_hex(12);name=track_id+'.mp3'
+    with open(os.path.join(TRACK_DIR,name),'xb') as f:f.write(raw)
+    with sqlite3.connect(DB) as db:db.execute('INSERT INTO artist_tracks VALUES(?,?,?,?,?)',(track_id,title,artist,name,int(time.time())))
+    return self.respond(201,{'ok':True,'id':track_id})
+   except (ValueError,OSError):return self.respond(400,{'error':'upload_failed'})
   if path=='/api/internal/reminder-claim':
    try:data=self.read_json()
    except (ValueError,TypeError,json.JSONDecodeError):return self.respond(400,{'error':'invalid_json'})

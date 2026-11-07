@@ -249,10 +249,10 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.exception("Profile Premium status unavailable")
         status = "⚠️ Не удалось проверить Premium. Попробуй позже."
     await update.effective_message.reply_text(
-        f"👤 Профиль WAVE Music\\n\\n"
-        f"Имя: {name}\\n"
-        f"Telegram ID: {user.id}\\n"
-        f"Статус: {status}\\n\\n"
+        f"👤 Профиль WAVE Music\n\n"
+        f"Имя: {name}\n"
+        f"Telegram ID: {user.id}\n"
+        f"Статус: {status}\n\n"
         "Управление музыкой и комнатами доступно в приложении.",
         reply_markup=main_keyboard(),
     )

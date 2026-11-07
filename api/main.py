@@ -247,6 +247,20 @@ class Handler(BaseHTTPRequestHandler):
    return self.respond(200,{'room':{'id':room[0],'owner_id':room[1],'title':room[2],'visibility':room[3],'track':json.loads(room[4]),'playing':bool(room[5]),'position':room[6],'updated':room[7],'server_time':time.time(),'effective_position':room[6]+max(0,time.time()-room[7]) if room[5] else room[6]},'role':role[0],'members':[{'user_id':m[0],'role':m[1]} for m in members],'queue':[{'id':q[0],'title':q[1],'artist':q[2],'source':q[3]} for q in queue]})
  def do_POST(self):
   path=urlsplit(self.path).path
+  if path=='/api/internal/artist-upload':
+   if not TOKEN:return self.respond(403,{'error':'forbidden'})
+   try:
+    size=int(self.headers.get('Content-Length','0'))
+    if not 128<=size<=15*1024*1024:return self.respond(413,{'error':'file_too_large'})
+    raw=self.rfile.read(size)
+    expected=hmac.new(TOKEN.encode(),raw,hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(self.headers.get('X-Wave-Signature',''),expected):return self.respond(403,{'error':'forbidden'})
+    if not (raw.startswith(b'ID3') or raw[:2] in (b'\\xff\\xfb',b'\\xff\\xf3',b'\\xff\\xf2')):return self.respond(400,{'error':'invalid_mp3'})
+    track_id=secrets.token_hex(12);name=track_id+'.mp3'
+    with open(os.path.join(TRACK_DIR,name),'xb') as f:f.write(raw)
+    with sqlite3.connect(DB) as db:db.execute('INSERT INTO artist_tracks VALUES(?,?,?,?,?)',(track_id,'Встречай, столица!','Khast',name,int(time.time())))
+    return self.respond(201,{'ok':True,'id':track_id})
+   except (OSError,ValueError):return self.respond(400,{'error':'upload_failed'})
   if path=='/api/artist-tracks':
    user=verify(self.headers.get('X-Telegram-Init-Data',''))
    if not user:return self.respond(401,{'error':'unauthorized'})

@@ -155,6 +155,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def premium_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    await remove_previous_menu(query)
     await query.message.reply_invoice(
         title="WAVE Premium — 30 дней",
         description="30 дней Premium-доступа WAVE Music. Подписка продлевается только после новой оплаты.",
@@ -373,7 +374,7 @@ async def notifications_callback(update: Update, context: ContextTypes.DEFAULT_T
     try:
         settings = await asyncio.to_thread(notification_api, query.from_user.id)
         await asyncio.to_thread(notification_api, query.from_user.id, key, not bool(settings.get(key, True)))
-        await query.message.reply_text("✅ Настройка сохранена.")
+        await remove_previous_menu(query)
         await notifications_command(update, context)
     except Exception:
         logging.exception("Notification preference update failed")
@@ -434,9 +435,18 @@ async def premium_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'Нажми «Подписка Premium», чтобы открыть счёт Telegram Stars.\n'
         'Покупка не продлевается автоматически.', reply_markup=main_keyboard())
 
+async def remove_previous_menu(query):
+    """Delete only the bot menu message the user clicked, not chat history."""
+    try:
+        if query.message and query.message.from_user and query.message.from_user.is_bot:
+            await query.message.delete()
+    except Exception:
+        logging.info("Could not delete previous bot menu; continuing navigation")
+
 async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query=update.callback_query
     await query.answer()
+    await remove_previous_menu(query)
     if query.data=='about':
         await about_command(update, context)
     elif query.data=='help_info':

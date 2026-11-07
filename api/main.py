@@ -1,4 +1,4 @@
-import os, json, hmac, hashlib, sqlite3, time, urllib.request, urllib.error
+import os, json, hmac, hashlib, sqlite3, time, urllib.request, urllib.error, re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qsl, urlsplit, parse_qs, urlencode, unquote
 import secrets, threading
@@ -141,12 +141,37 @@ class Handler(BaseHTTPRequestHandler):
    filename=os.path.join(TRACK_DIR,row[0])
    try:
     size=os.path.getsize(filename)
-    self.send_response(200);self.send_header('Content-Type','audio/mpeg');self.send_header('Content-Length',str(size));self.send_header('Accept-Ranges','none');self.send_header('Cache-Control','public, max-age=3600');self.end_headers()
+    start,end=0,size-1
+    requested=self.headers.get('Range','').strip()
+    partial=False
+    if requested:
+     match=re.fullmatch(r'bytes=(\\d*)-(\\d*)',requested)
+     if not match or (not match.group(1) and not match.group(2)):
+      self.send_response(416);self.send_header('Content-Range',f'bytes */{size}');self.end_headers();return
+     if match.group(1):
+      start=int(match.group(1))
+      if match.group(2):end=min(size-1,int(match.group(2)))
+     else:
+      start=max(0,size-int(match.group(2)))
+     if start>=size or start>end:
+      self.send_response(416);self.send_header('Content-Range',f'bytes */{size}');self.end_headers();return
+     partial=True
+    count=end-start+1
+    self.send_response(206 if partial else 200)
+    self.send_header('Content-Type','audio/mpeg')
+    self.send_header('Content-Length',str(count))
+    self.send_header('Accept-Ranges','bytes')
+    if partial:self.send_header('Content-Range',f'bytes {start}-{end}/{size}')
+    self.send_header('Cache-Control','public, max-age=3600')
+    self.end_headers()
     with open(filename,'rb') as f:
-     while True:
-      chunk=f.read(65536)
+     f.seek(start)
+     remaining=count
+     while remaining>0:
+      chunk=f.read(min(65536,remaining))
       if not chunk:break
       self.wfile.write(chunk)
+      remaining-=len(chunk)
    except (FileNotFoundError,BrokenPipeError,ConnectionResetError):pass
    return
   if path=='/api/catalog':return self.catalog_get()

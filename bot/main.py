@@ -25,6 +25,87 @@ PREVIEW_PHOTOS = [u.strip() for u in os.getenv("PREVIEW_PHOTO_URLS", "").split("
 if not TOKEN:
     raise RuntimeError("BOT_TOKEN is missing. Set it in Railway service variables.")
 
+def internal_notifications(path, payload=None, signature_message=None):
+    if payload is None:
+        body = signature_message or b''
+        request = urllib.request.Request(
+            API_URL + path,
+            headers={"X-Wave-Signature": hmac.new(TOKEN.encode(), body, hashlib.sha256).hexdigest()},
+        )
+    else:
+        body = json.dumps(payload, separators=(',', ':')).encode()
+        request = urllib.request.Request(
+            API_URL + path, data=body, method="POST",
+            headers={"X-Wave-Signature": hmac.new(TOKEN.encode(), body, hashlib.sha256).hexdigest(),
+                     "Content-Type": "application/json"},
+        )
+    with urllib.request.urlopen(request, timeout=15) as response:
+        return json.load(response)
+
+async def register_subscriber(user_id: int):
+    try:
+        await asyncio.to_thread(internal_notifications, "/api/internal/subscribe", {"user_id": user_id})
+    except Exception:
+        logging.exception("Subscriber registration failed")
+
+async def reminder_loop(application: Application):
+    while True:
+        try:
+            due = await asyncio.to_thread(internal_notifications, "/api/internal/premium-due", None, b'premium-due')
+            for item in due.get('due', []):
+                user_id = int(item['user_id'])
+                expires_at = int(item['expires_at'])
+                claim = await asyncio.to_thread(internal_notifications, "/api/internal/reminder-claim",
+                                                {"user_id": user_id, "expires_at": expires_at})
+                if not claim.get("claimed"):
+                    continue
+                date = datetime.fromtimestamp(expires_at, timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
+                try:
+                    await application.bot.send_message(
+                        user_id,
+                        f"⏰ WAVE Premium заканчивается менее чем через 24 часа.\n"
+                        f"Срок действия: {date}.\n\n"
+                        "Продлить подписку можно через /premium. Отключить напоминания: /notifications.",
+                    )
+                except Exception:
+                    logging.exception("Premium reminder delivery failed for user %s", user_id)
+                await asyncio.sleep(0.15)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.exception("Premium reminder check failed")
+        await asyncio.sleep(3600)
+
+async def news_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not ADMIN_ID or update.effective_user.id != ADMIN_ID:
+        await update.effective_message.reply_text("Команда доступна только администратору.")
+        return
+    content = " ".join(context.args).strip()
+    if not content or len(content) > 1000:
+        await update.effective_message.reply_text("Использование: /news Текст новости (до 1000 символов).")
+        return
+    try:
+        recipients = await asyncio.to_thread(
+            internal_notifications, "/api/internal/notification-recipients?kind=news", None, b"recipients:news"
+        )
+    except Exception:
+        logging.exception("News recipients unavailable")
+        await update.effective_message.reply_text("❌ Не удалось получить список подписчиков.")
+        return
+    sent = 0
+    failed = 0
+    for user_id in recipients.get("users", []):
+        try:
+            await context.bot.send_message(
+                int(user_id), "📢 Новости WAVE Music\n\n" + content +
+                "\n\nОтключить новости: /notifications"
+            )
+            sent += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(0.07)
+    await update.effective_message.reply_text(f"📢 Рассылка завершена. Доставлено: {sent}. Ошибок: {failed}.")
+
 def preview_api(method='GET', photos=None):
     body = json.dumps({'photos': photos}, separators=(',', ':')).encode() if photos is not None else b'preview-read'
     signature = hmac.new(TOKEN.encode(), body, hashlib.sha256).hexdigest()
@@ -44,6 +125,7 @@ def main_keyboard():
     ])
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await register_subscriber(update.effective_user.id)
     try:
         saved = await asyncio.to_thread(preview_api)
         photos = saved.get('photos') or PREVIEW_PHOTOS
@@ -258,6 +340,7 @@ def profile_keyboard():
 
 async def notifications_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    await register_subscriber(user.id)
     try:
         settings = await asyncio.to_thread(notification_api, user.id)
     except Exception:
@@ -271,7 +354,7 @@ async def notifications_command(update: Update, context: ContextTypes.DEFAULT_TY
     ])
     await update.effective_message.reply_text(
         "🔔 Настройки уведомлений\n\nВыбери, какие уведомления разрешить. "
-        "Настройки сохраняются в твоём аккаунте. Автоматические рассылки пока не включены.",
+        "Настройки сохраняются в твоём аккаунте. Напоминания Premium отправляются автоматически, новости — администратором.",
         reply_markup=keyboard,
     )
 
@@ -360,6 +443,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text('🌊 Главное меню WAVE Music', reply_markup=main_keyboard())
 
 async def post_init(application: Application):
+    application.bot_data['reminder_task'] = asyncio.create_task(reminder_loop(application))
     await application.bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="🎧 WAVE Music", web_app=WebAppInfo(url=URL)))
 
 def main():
@@ -370,6 +454,7 @@ def main():
     app.add_handler(CommandHandler("premium", premium_command))
     app.add_handler(CommandHandler("profile", profile_command))
     app.add_handler(CommandHandler("notifications", notifications_command))
+    app.add_handler(CommandHandler("news", news_command))
     app.add_handler(CommandHandler("support", support_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
     app.add_handler(CommandHandler("setpreview", setpreview))

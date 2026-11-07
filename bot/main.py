@@ -160,8 +160,8 @@ async def support_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     context.user_data["support_mode"] = True
     await update.effective_message.reply_text(
-        "💬 Поддержка WAVE Music\\n\\nОпиши проблему одним текстовым сообщением (до 3000 символов). "
-        "Не отправляй пароли, коды входа или данные банковской карты.\\n\\n"
+        "💬 Поддержка WAVE Music\n\nОпиши проблему одним текстовым сообщением (до 3000 символов). "
+        "Не отправляй пароли, коды входа или данные банковской карты.\n\n"
         "Для отмены отправь /cancel.")
 
 async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -175,7 +175,7 @@ async def support_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if user.id == ADMIN_ID and message.reply_to_message:
         original = message.reply_to_message.text or ""
-        match = re.match(r"^🎫 WAVE SUPPORT\\nUser ID: (\\d+)\\n", original)
+        match = re.match(r"^🎫 WAVE SUPPORT\nUser ID: (\\d+)\n", original)
         if match:
             target = int(match.group(1))
             if target == ADMIN_ID:
@@ -183,7 +183,7 @@ async def support_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.send_message(
                     chat_id=target,
-                    text="💬 Ответ поддержки WAVE Music:\\n\\n" + message.text[:3500],
+                    text="💬 Ответ поддержки WAVE Music:\n\n" + message.text[:3500],
                 )
                 await message.reply_text("✅ Ответ доставлен пользователю.")
             except Exception:
@@ -206,8 +206,8 @@ async def support_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.send_message(
             chat_id=ADMIN_ID,
-            text=f"🎫 WAVE SUPPORT\\nUser ID: {user.id}\\n\\n"
-                 f"Сообщение пользователя:\\n{message.text.strip()}",
+            text=f"🎫 WAVE SUPPORT\nUser ID: {user.id}\n\n"
+                 f"Сообщение пользователя:\n{message.text.strip()}",
         )
         context.user_data["support_last_sent"] = time.time()
         context.user_data.pop("support_mode", None)
@@ -221,29 +221,29 @@ async def support_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text(
-        '❓ Помощь WAVE Music\\n\\n'
-        '/start — приветствие и запуск приложения\\n'
-        '/about — информация о сервисе\\n'
-        '/premium — оформить Premium за 159 ⭐ на 30 дней\\n'
-        '/support — написать в поддержку\\n'
-        '/cancel — отменить обращение\\n'
-        '/help — список команд\\n\\n'
+        '❓ Помощь WAVE Music\n\n'
+        '/start — приветствие и запуск приложения\n'
+        '/about — информация о сервисе\n'
+        '/premium — оформить Premium за 159 ⭐ на 30 дней\n'
+        '/support — написать в поддержку\n'
+        '/cancel — отменить обращение\n'
+        '/help — список команд\n\n'
         'Если музыка не запускается, проверь подключение и доступность аудиоисточника.',
         reply_markup=main_keyboard())
 
 async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text(
-        '🌊 WAVE Music — музыкальное приложение внутри Telegram.\\n\\n'
-        '🎵 Поиск треков и личная медиатека\\n'
-        '👥 Совместные музыкальные комнаты\\n'
-        '🎛 Управление очередью для владельца и DJ\\n\\n'
+        '🌊 WAVE Music — музыкальное приложение внутри Telegram.\n\n'
+        '🎵 Поиск треков и личная медиатека\n'
+        '👥 Совместные музыкальные комнаты\n'
+        '🎛 Управление очередью для владельца и DJ\n\n'
         'Некоторые возможности, включая воспроизведение внешнего каталога, ещё разрабатываются.',
         reply_markup=main_keyboard())
 
 async def premium_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text(
-        '💎 WAVE Premium — 159 ⭐ за 30 дней.\\n'
-        'Нажми «Подписка Premium», чтобы открыть счёт Telegram Stars.\\n'
+        '💎 WAVE Premium — 159 ⭐ за 30 дней.\n'
+        'Нажми «Подписка Premium», чтобы открыть счёт Telegram Stars.\n'
         'Покупка не продлевается автоматически.', reply_markup=main_keyboard())
 
 async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

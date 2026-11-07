@@ -204,9 +204,15 @@ class Handler(BaseHTTPRequestHandler):
    if result.get('headers',{}).get('status')!='success':return self.respond(502,{'error':'catalog_provider_error'})
    tracks=[]
    for item in result.get('results',[]):
+    track_id=str(item.get('id',''))
+    if not track_id.isdigit():continue
     audio=item.get('audio','')
-    if not audio.startswith('https://'):continue
-    tracks.append({'id':str(item.get('id','')),'title':item.get('name',''),'artist':item.get('artist_name',''),'url':audio,'image':item.get('image',''),'license_url':item.get('license_ccurl',''),'provider':'Jamendo'})
+    license_url=item.get('license_ccurl','')
+    # Public search is not permission to stream. Keep playback disabled until
+    # the API agreement and each track's Creative Commons license are reviewed.
+    streaming=os.environ.get('JAMENDO_STREAMING_ENABLED','false').lower()=='true'
+    permitted=streaming and isinstance(audio,str) and audio.startswith('https://') and isinstance(license_url,str) and license_url.startswith('https://creativecommons.org/licenses/')
+    tracks.append({'id':track_id,'title':item.get('name',''),'artist':item.get('artist_name',''),'url':audio if permitted else '', 'image':item.get('image',''),'license_url':license_url,'provider':'Jamendo','permalink':'https://www.jamendo.com/track/'+track_id})
    return self.respond(200,{'tracks':tracks,'configured':True,'provider':'jamendo'})
   except (urllib.error.URLError,ValueError,KeyError,TimeoutError):return self.respond(502,{'error':'catalog_unavailable'})
  def audius_catalog(self):

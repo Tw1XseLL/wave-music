@@ -464,6 +464,39 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data=='main_menu':
         await query.message.reply_text('🌊 Главное меню WAVE Music', reply_markup=main_keyboard())
 
+async def uploadtrack_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return await update.effective_message.reply_text("⛔ Загрузка авторских релизов доступна только владельцу.")
+    context.user_data["artist_upload_waiting"] = True
+    await update.effective_message.reply_text("🎙 Отправь MP3-файл документом в этот чат. Я опубликую его как «Встречай, столица!» — Khast. Максимум 15 МБ. Для отмены: /cancel.")
+
+async def artist_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.effective_message
+    if update.effective_user.id != ADMIN_ID or not context.user_data.get("artist_upload_waiting"):
+        return
+    doc = message.document
+    if not doc or doc.file_size is None or doc.file_size > 15 * 1024 * 1024 or not doc.file_name.lower().endswith(".mp3"):
+        return await message.reply_text("Нужен MP3-документ размером не более 15 МБ.")
+    status = await message.reply_text("⏳ Загружаю авторский трек на WAVE Music…")
+    try:
+        tgfile = await context.bot.get_file(doc.file_id)
+        payload = bytes(await tgfile.download_as_bytearray())
+        if not (payload.startswith(b"ID3") or payload[:2] in (b"\\xff\\xfb", b"\\xff\\xf3", b"\\xff\\xf2")):
+            return await status.edit_text("❌ Файл не похож на MP3.")
+        def upload():
+            signature = hmac.new(TOKEN.encode(), payload, hashlib.sha256).hexdigest()
+            request = urllib.request.Request(API_URL + "/api/internal/artist-upload", data=payload, headers={"Content-Type": "audio/mpeg", "X-Wave-Signature": signature}, method="POST")
+            with urllib.request.urlopen(request, timeout=90) as response:
+                return json.load(response)
+        result = await asyncio.to_thread(upload)
+        if not result.get("ok"):
+            raise ValueError("Upload was not confirmed")
+        context.user_data["artist_upload_waiting"] = False
+        await status.edit_text("✅ «Встречай, столица!» — Khast опубликована в WAVE Music. Открой приложение и проверь воспроизведение.")
+    except Exception as exc:
+        logging.exception("Artist upload failed")
+        await status.edit_text("❌ Не удалось загрузить MP3: " + type(exc).__name__ + ". Попробуй ещё раз или отправь /cancel.")
+
 async def post_init(application: Application):
     application.bot_data['reminder_task'] = asyncio.create_task(reminder_loop(application))
     await application.bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="🎧 WAVE Music", web_app=WebAppInfo(url=URL)))
@@ -481,6 +514,8 @@ def main():
     app.add_handler(CommandHandler("cancel", cancel_command))
     app.add_handler(CommandHandler("setpreview", setpreview))
     app.add_handler(CommandHandler("clearpreviews", clearpreviews))
+    app.add_handler(CommandHandler("uploadtrack", uploadtrack_command))
+    app.add_handler(MessageHandler(filters.Document.ALL, artist_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, support_messages))
     app.add_handler(CallbackQueryHandler(premium_info, pattern="^premium_info$"))
     app.add_handler(CallbackQueryHandler(menu_callback, pattern="^(about|help_info|support_start|profile|notification_settings|main_menu)$"))

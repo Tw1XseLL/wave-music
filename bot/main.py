@@ -175,10 +175,11 @@ async def support_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if user.id == ADMIN_ID and message.reply_to_message:
         original = message.reply_to_message.text or ""
-        match = re.match(r"^🎫 WAVE SUPPORT\nUser ID: (\\d+)\n", original)
+        match = re.match(r"^🎫 WAVE SUPPORT\nUser ID: (\d+)\n", original)
         if match:
             target = int(match.group(1))
             if target == ADMIN_ID:
+                await message.reply_text("🧪 Тестовый ответ обработан. Это твой администраторский чат, поэтому пересылка самому себе не требуется.")
                 return
             try:
                 await context.bot.send_message(
@@ -192,16 +193,6 @@ async def support_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
     if not context.user_data.get("support_mode"):
         return
-    if user.id == ADMIN_ID:
-        context.user_data.pop("support_mode", None)
-        await message.reply_text(
-            "🧪 Тест поддержки пройден! Сообщение принято.\\n\\n"
-            "В обычном режиме обращения пользователей приходят сюда, "
-            "а ты отвечаешь на сообщение с заявкой через функцию «Ответить».\\n\\n"
-            "Для полноценной проверки доставки ответа нужен второй Telegram-аккаунт.",
-            reply_markup=main_keyboard(),
-        )
-        return
     if not 1 <= len(message.text.strip()) <= 3000:
         await message.reply_text("Напиши сообщение длиной от 1 до 3000 символов.")
         return
@@ -213,11 +204,14 @@ async def support_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(
             chat_id=ADMIN_ID,
             text=f"🎫 WAVE SUPPORT\nUser ID: {user.id}\n\n"
-                 f"Сообщение пользователя:\n{message.text.strip()}",
+                 f"Сообщение пользователя:\n{message.text.strip()}"
+                 + ("\n\n🧪 Тестовая заявка администратора" if user.id == ADMIN_ID else ""),
         )
         context.user_data["support_last_sent"] = time.time()
         context.user_data.pop("support_mode", None)
         await message.reply_text(
+            "🧪 Тестовая заявка доставлена в этот чат. Ответь на сообщение «🎫 WAVE SUPPORT», чтобы проверить обработку ответа."
+            if user.id == ADMIN_ID else
             "✅ Обращение отправлено! Администратор ответит здесь, в этом чате.",
             reply_markup=main_keyboard(),
         )

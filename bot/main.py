@@ -119,7 +119,6 @@ def main_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🎧 Открыть WAVE Music", web_app=WebAppInfo(url=URL))],
         [InlineKeyboardButton("👤 Мой профиль", callback_data="profile")],
-        [InlineKeyboardButton("💎 Подписка Premium", callback_data="premium_info")],
         [InlineKeyboardButton("ℹ️ О WAVE Music", callback_data="about"), InlineKeyboardButton("❓ Помощь", callback_data="help_info")],
         [InlineKeyboardButton("💬 Поддержка", callback_data="support_start")],
     ])
@@ -152,22 +151,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_keyboard(),
     )
 
+async def precheckout_free(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.pre_checkout_query.answer(ok=False, error_message="WAVE Music теперь бесплатен. Оплата не требуется.")
+
 async def premium_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     await remove_previous_menu(query)
-    await query.message.reply_invoice(
-        title="WAVE Premium — 30 дней",
-        description="30 дней Premium-доступа WAVE Music. Подписка продлевается только после новой оплаты.",
-        payload=f"wave_premium_30:{query.from_user.id}",
-        currency="XTR",
-        prices=[LabeledPrice(label="WAVE Premium — 30 дней", amount=159)],
-        provider_token="",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("⭐ Оплатить 159 Stars", pay=True)],
-            [InlineKeyboardButton("⬅️ Назад в главное меню", callback_data="main_menu")],
-        ]),
-    )
+    await query.message.reply_text("🌊 WAVE Music теперь полностью бесплатный. Оплата и подписки отключены.", reply_markup=main_keyboard())
 
 async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.pre_checkout_query
@@ -434,10 +425,7 @@ async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_keyboard())
 
 async def premium_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.effective_message.reply_text(
-        '💎 WAVE Premium — 159 ⭐ за 30 дней.\n'
-        'Нажми «Подписка Premium», чтобы открыть счёт Telegram Stars.\n'
-        'Покупка не продлевается автоматически.', reply_markup=main_keyboard())
+    await update.effective_message.reply_text("🌊 WAVE Music бесплатен для всех. Платные подписки отключены.", reply_markup=main_keyboard())
 
 async def remove_previous_menu(query):
     """Delete only the bot menu message the user clicked, not chat history."""
@@ -520,7 +508,7 @@ def main():
     app.add_handler(CallbackQueryHandler(premium_info, pattern="^premium_info$"))
     app.add_handler(CallbackQueryHandler(menu_callback, pattern="^(about|help_info|support_start|profile|notification_settings|main_menu)$"))
     app.add_handler(CallbackQueryHandler(notifications_callback, pattern="^notify_(news|premium)$"))
-    app.add_handler(PreCheckoutQueryHandler(precheckout))
+    app.add_handler(PreCheckoutQueryHandler(precheckout_free))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
     app.run_polling(drop_pending_updates=True)
 

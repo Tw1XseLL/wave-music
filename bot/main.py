@@ -10,6 +10,9 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebAp
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, PreCheckoutQueryHandler, MessageHandler, filters
 
 logging.basicConfig(level=logging.INFO)
+# Avoid logging Telegram Bot API URLs containing the secret bot token.
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('httpcore').setLevel(logging.WARNING)
 URL = os.getenv("WEB_APP_URL", "https://wave-web-production.up.railway.app")
 TOKEN = os.getenv("BOT_TOKEN", "").strip()
 API_URL = os.getenv('WAVE_API_URL', 'https://wave-api-production-c0c4.up.railway.app').rstrip('/')
@@ -32,6 +35,7 @@ def main_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🎧 Открыть WAVE Music", web_app=WebAppInfo(url=URL))],
         [InlineKeyboardButton("💎 Подписка Premium", callback_data="premium_info")],
+        [InlineKeyboardButton("ℹ️ О WAVE Music", callback_data="about"), InlineKeyboardButton("❓ Помощь", callback_data="help_info")],
     ])
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -149,7 +153,37 @@ async def clearpreviews(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.exception('Failed to clear previews')
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.effective_message.reply_text("Нажми /start, чтобы открыть WAVE Music или узнать о Premium.")
+    await update.effective_message.reply_text(
+        '❓ Помощь WAVE Music\\n\\n'
+        '/start — приветствие и запуск приложения\\n'
+        '/about — информация о сервисе\\n'
+        '/premium — оформить Premium за 159 ⭐ на 30 дней\\n'
+        '/help — список команд\\n\\n'
+        'Если музыка не запускается, проверь подключение и доступность аудиоисточника.',
+        reply_markup=main_keyboard())
+
+async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(
+        '🌊 WAVE Music — музыкальное приложение внутри Telegram.\\n\\n'
+        '🎵 Поиск треков и личная медиатека\\n'
+        '👥 Совместные музыкальные комнаты\\n'
+        '🎛 Управление очередью для владельца и DJ\\n\\n'
+        'Некоторые возможности, включая воспроизведение внешнего каталога, ещё разрабатываются.',
+        reply_markup=main_keyboard())
+
+async def premium_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(
+        '💎 WAVE Premium — 159 ⭐ за 30 дней.\\n'
+        'Нажми «Подписка Premium», чтобы открыть счёт Telegram Stars.\\n'
+        'Покупка не продлевается автоматически.', reply_markup=main_keyboard())
+
+async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    if query.data=='about':
+        await about_command(update, context)
+    elif query.data=='help_info':
+        await help_command(update, context)
 
 async def post_init(application: Application):
     await application.bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="🎧 WAVE Music", web_app=WebAppInfo(url=URL)))
@@ -158,10 +192,13 @@ def main():
     app = Application.builder().token(TOKEN).post_init(post_init).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("about", about_command))
+    app.add_handler(CommandHandler("premium", premium_command))
     app.add_handler(CommandHandler("setpreview", setpreview))
     app.add_handler(CommandHandler("clearpreviews", clearpreviews))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, preview_command_fallback))
     app.add_handler(CallbackQueryHandler(premium_info, pattern="^premium_info$"))
+    app.add_handler(CallbackQueryHandler(menu_callback, pattern="^(about|help_info)$"))
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
     app.run_polling(drop_pending_updates=True)

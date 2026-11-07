@@ -25,3 +25,8 @@
 .queue-list .queue-active{background:#a887e52a;color:#e6d4ff}
 @keyframes wave-rise{from{opacity:.5;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
 @media(max-height:720px){.player.expanded .album{width:min(67vw,235px);margin:10px auto}.player-actions{margin:12px 0}.now-playing{margin:8px 0 14px}}
+
+.player-actions{gap:clamp(10px,4vw,26px)}
+.player-actions button{font-size:clamp(19px,5vw,27px);min-width:38px}
+.player-actions .mode-active{color:#d8baff;filter:drop-shadow(0 0 7px #9a6cff)}
+.player-actions .primary-play{flex-shrink:0}

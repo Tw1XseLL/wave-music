@@ -28,6 +28,8 @@ with sqlite3.connect(DB) as db:
  db.execute("CREATE TABLE IF NOT EXISTS star_payments (charge_id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, stars INTEGER NOT NULL, created_at INTEGER NOT NULL)")
 with sqlite3.connect(DB) as db:
  db.execute("CREATE TABLE IF NOT EXISTS bot_preview (position INTEGER PRIMARY KEY, file_id TEXT NOT NULL)")
+with sqlite3.connect(DB) as db:
+ db.execute("CREATE TABLE IF NOT EXISTS bot_notifications (user_id INTEGER PRIMARY KEY, news INTEGER NOT NULL DEFAULT 1, premium INTEGER NOT NULL DEFAULT 1)")
 ROOM_LOCK=threading.RLock()
 def user_id_from_token():
  return TOKEN.split(":")[0] if ":" in TOKEN else ""
@@ -78,6 +80,16 @@ class Handler(BaseHTTPRequestHandler):
    if not TOKEN or not hmac.compare_digest(self.headers.get('X-Wave-Signature',''),expected):return self.respond(403,{'error':'forbidden'})
    with sqlite3.connect(DB) as db:rows=db.execute('SELECT file_id FROM bot_preview ORDER BY position LIMIT 4').fetchall()
    return self.respond(200,{'photos':[r[0] for r in rows]})
+  if path=='/api/internal/notifications':
+   query=parse_qs(urlsplit(self.path).query)
+   try:uid=int(query.get('user_id',[''])[0])
+   except (ValueError,TypeError):return self.respond(400,{'error':'invalid_user'})
+   if uid<=0:return self.respond(400,{'error':'invalid_user'})
+   expected=hmac.new(TOKEN.encode(),f'notifications-read:{uid}'.encode(),hashlib.sha256).hexdigest()
+   if not TOKEN or not hmac.compare_digest(self.headers.get('X-Wave-Signature',''),expected):return self.respond(403,{'error':'forbidden'})
+   with sqlite3.connect(DB) as db:
+    row=db.execute('SELECT news,premium FROM bot_notifications WHERE user_id=?',(uid,)).fetchone()
+   return self.respond(200,{'news':bool(row[0]) if row else True,'premium':bool(row[1]) if row else True})
   if path=='/api/internal/premium':
    query=parse_qs(urlsplit(self.path).query)
    try:uid=int(query.get('user_id',[''])[0])
@@ -169,6 +181,18 @@ class Handler(BaseHTTPRequestHandler):
    return self.respond(200,{'room':{'id':room[0],'owner_id':room[1],'title':room[2],'visibility':room[3],'track':json.loads(room[4]),'playing':bool(room[5]),'position':room[6],'updated':room[7],'server_time':time.time(),'effective_position':room[6]+max(0,time.time()-room[7]) if room[5] else room[6]},'role':role[0],'members':[{'user_id':m[0],'role':m[1]} for m in members],'queue':[{'id':q[0],'title':q[1],'artist':q[2],'source':q[3]} for q in queue]})
  def do_POST(self):
   path=urlsplit(self.path).path
+  if path=='/api/internal/notifications':
+   try:data=self.read_json()
+   except (ValueError,TypeError,json.JSONDecodeError):return self.respond(400,{'error':'invalid_json'})
+   uid=data.get('user_id');key=data.get('key');enabled=data.get('enabled')
+   if type(uid)!=int or uid<=0 or key not in ('news','premium') or type(enabled)!=bool:return self.respond(400,{'error':'invalid_settings'})
+   payload=json.dumps(data,separators=(',',':')).encode()
+   expected=hmac.new(TOKEN.encode(),payload,hashlib.sha256).hexdigest()
+   if not TOKEN or not hmac.compare_digest(self.headers.get('X-Wave-Signature',''),expected):return self.respond(403,{'error':'forbidden'})
+   with sqlite3.connect(DB) as db:
+    db.execute('INSERT OR IGNORE INTO bot_notifications(user_id) VALUES(?)',(uid,))
+    db.execute('UPDATE bot_notifications SET '+key+'=? WHERE user_id=?',(int(enabled),uid))
+   return self.respond(200,{'ok':True})
   if path=='/api/internal/stars':return self.stars_payment()
   if path=='/api/internal/previews':return self.preview_save()
   if path!='/api/rooms' and not path.startswith('/api/rooms/'):return self.respond(404,{'error':'not_found'})

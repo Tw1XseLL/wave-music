@@ -231,6 +231,63 @@ def premium_status_api(user_id: int):
     with urllib.request.urlopen(request, timeout=12) as response:
         return json.load(response)
 
+def notification_api(user_id: int, key=None, enabled=None):
+    if key is None:
+        signature = hmac.new(TOKEN.encode(), f"notifications-read:{user_id}".encode(), hashlib.sha256).hexdigest()
+        request = urllib.request.Request(
+            API_URL + "/api/internal/notifications?" + urlencode({"user_id": user_id}),
+            headers={"X-Wave-Signature": signature},
+        )
+    else:
+        body = json.dumps({"user_id": user_id, "key": key, "enabled": enabled}, separators=(",", ":")).encode()
+        signature = hmac.new(TOKEN.encode(), body, hashlib.sha256).hexdigest()
+        request = urllib.request.Request(
+            API_URL + "/api/internal/notifications", data=body,
+            headers={"X-Wave-Signature": signature, "Content-Type": "application/json"}, method="POST",
+        )
+    with urllib.request.urlopen(request, timeout=12) as response:
+        return json.load(response)
+
+def profile_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔔 Настройки уведомлений", callback_data="notification_settings")],
+        [InlineKeyboardButton("💎 Premium", callback_data="premium_info")],
+        [InlineKeyboardButton("🎧 Открыть приложение", web_app=WebAppInfo(url=URL))],
+        [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")],
+    ])
+
+async def notifications_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    try:
+        settings = await asyncio.to_thread(notification_api, user.id)
+    except Exception:
+        logging.exception("Notification settings unavailable")
+        await update.effective_message.reply_text("⚠️ Настройки временно недоступны. Попробуй позже.")
+        return
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton(("✅" if settings.get("news", True) else "❌") + " Новости WAVE", callback_data="notify_news")],
+        [InlineKeyboardButton(("✅" if settings.get("premium", True) else "❌") + " Напоминания Premium", callback_data="notify_premium")],
+        [InlineKeyboardButton("👤 Вернуться в профиль", callback_data="profile")],
+    ])
+    await update.effective_message.reply_text(
+        "🔔 Настройки уведомлений\n\nВыбери, какие уведомления разрешить. "
+        "Настройки сохраняются в твоём аккаунте. Автоматические рассылки пока не включены.",
+        reply_markup=keyboard,
+    )
+
+async def notifications_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    key = query.data.removeprefix("notify_")
+    try:
+        settings = await asyncio.to_thread(notification_api, query.from_user.id)
+        await asyncio.to_thread(notification_api, query.from_user.id, key, not bool(settings.get(key, True)))
+        await query.message.reply_text("✅ Настройка сохранена.")
+        await notifications_command(update, context)
+    except Exception:
+        logging.exception("Notification preference update failed")
+        await query.message.reply_text("❌ Не удалось сохранить настройку. Попробуй позже.")
+
 async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user:
@@ -254,7 +311,7 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Telegram ID: {user.id}\n"
         f"Статус: {status}\n\n"
         "Управление музыкой и комнатами доступно в приложении.",
-        reply_markup=main_keyboard(),
+        reply_markup=profile_keyboard(),
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -264,6 +321,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         '/about — информация о сервисе\n'
         '/premium — оформить Premium за 159 ⭐ на 30 дней\n'
         '/profile — профиль и статус подписки\n'
+        '/notifications — настройки уведомлений\n'
         '/support — написать в поддержку\n'
         '/cancel — отменить обращение\n'
         '/help — список команд\n\n'
@@ -296,6 +354,10 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await support_command(update, context)
     elif query.data=='profile':
         await profile_command(update, context)
+    elif query.data=='notification_settings':
+        await notifications_command(update, context)
+    elif query.data=='main_menu':
+        await query.message.reply_text('🌊 Главное меню WAVE Music', reply_markup=main_keyboard())
 
 async def post_init(application: Application):
     await application.bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="🎧 WAVE Music", web_app=WebAppInfo(url=URL)))
@@ -307,13 +369,15 @@ def main():
     app.add_handler(CommandHandler("about", about_command))
     app.add_handler(CommandHandler("premium", premium_command))
     app.add_handler(CommandHandler("profile", profile_command))
+    app.add_handler(CommandHandler("notifications", notifications_command))
     app.add_handler(CommandHandler("support", support_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
     app.add_handler(CommandHandler("setpreview", setpreview))
     app.add_handler(CommandHandler("clearpreviews", clearpreviews))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, support_messages))
     app.add_handler(CallbackQueryHandler(premium_info, pattern="^premium_info$"))
-    app.add_handler(CallbackQueryHandler(menu_callback, pattern="^(about|help_info|support_start|profile)$"))
+    app.add_handler(CallbackQueryHandler(menu_callback, pattern="^(about|help_info|support_start|profile|notification_settings|main_menu)$"))
+    app.add_handler(CallbackQueryHandler(notifications_callback, pattern="^notify_(news|premium)$"))
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
     app.run_polling(drop_pending_updates=True)
